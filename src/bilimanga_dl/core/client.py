@@ -16,6 +16,8 @@ from bilimanga_dl.sites.bilimanga import BilimangaParser
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from bilimanga_dl.core.reporting import DownloadIssue
+
 
 @dataclass(frozen=True)
 class DownloadSummary:
@@ -27,6 +29,10 @@ class DownloadSummary:
     downloaded: int
     skipped: int
     output_dir: Path
+    partial: int = 0
+    failed: int = 0
+    total_bytes: int = 0
+    issues: tuple[DownloadIssue, ...] = ()
 
 
 class TextBytesClient(Protocol):

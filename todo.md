@@ -65,12 +65,12 @@
 
 ## 6. 設定、歷史、通知與報告
 
-- [ ] 移植 `SettingsRepository`，預設 config path 改為 `~/.config/bilimanga-dl/settings.json`
-- [ ] 支援 concurrency profile：`desktop`、`low_resource`、`ci`、`custom`
-- [ ] 移植 `HistoryRepository`，記錄 completed/skipped/partial/failed、bytes、issues
-- [ ] 移植 download report formatter，CLI/history/notification 共用同一份 summary
-- [ ] 移植 best-effort desktop notification，名稱改為 `bilimanga-dl`
-- [ ] 補 settings/history/report tests
+- [x] 移植 `SettingsRepository`，預設 config path 改為 `~/.config/bilimanga-dl/settings.json`
+- [x] 支援 concurrency profile：`desktop`、`low_resource`、`ci`、`custom`
+- [x] 移植 `HistoryRepository`，記錄 completed/skipped/partial/failed、bytes、issues
+- [x] 移植 download report formatter，CLI/history/notification 共用同一份 summary
+- [x] 移植 best-effort desktop notification，名稱改為 `bilimanga-dl`
+- [x] 補 settings/history/report tests
 
 ## 7. 文件與發布
 
