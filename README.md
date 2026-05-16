@@ -17,6 +17,12 @@ Focused `bilimanga.net` parser and downloader, grown from the same architecture 
 
 ## Install
 
+One-command install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0xH4KU/bilimanga-downloader/main/install.sh | bash
+```
+
 Local development install:
 
 ```bash
@@ -24,10 +30,16 @@ python -m pip install -e '.[dev]'
 python -m playwright install chromium
 ```
 
-One-command install from a checkout:
+Install from a checkout:
 
 ```bash
 ./install.sh
+```
+
+Uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0xH4KU/bilimanga-downloader/main/install.sh | bash -s -- --uninstall
 ```
 
 Windows PowerShell:
