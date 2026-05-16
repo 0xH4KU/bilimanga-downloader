@@ -139,6 +139,31 @@ class FakeDownloader:
         )
 
 
+class MixedResultDownloader(FakeDownloader):
+    async def download_images(
+        self,
+        series_title: str,
+        chapter_title: str,
+        image_urls: list[str],
+        *,
+        referer: str | None = None,
+    ) -> DownloadResult:
+        self.calls.append((series_title, chapter_title, image_urls, referer))
+        failed = 1 if "STAGE.２" in chapter_title else 0
+        chapter_dir = self.output_dir / series_title / chapter_title
+        chapter_dir.mkdir(parents=True, exist_ok=True)
+        for index in range(1, max(0, len(image_urls) - failed) + 1):
+            (chapter_dir / f"{index:03d}.jpg").write_bytes(b"\xff\xd8")
+        return DownloadResult(
+            chapter_dir=chapter_dir,
+            total=len(image_urls),
+            downloaded=max(0, len(image_urls) - failed),
+            skipped=0,
+            failed=failed,
+            failed_files=("002",) if failed else (),
+        )
+
+
 async def test_download_url_expands_series_and_respects_limits(tmp_path: Path) -> None:
     http = FakeHttpClient(
         {
@@ -203,6 +228,62 @@ async def test_download_url_accepts_direct_chapter_url(tmp_path: Path) -> None:
     )
     assert summary.total_chapters == 1
     assert summary.total_images == 2
+
+
+async def test_download_url_summary_tracks_failed_partial_bytes_and_issues(tmp_path: Path) -> None:
+    reader_html_2_partial = READER_HTML_2.replace(
+        "</div>",
+        '  <img class="imagecontent" data-src="https://i.motiezw.com/0/285/24328/525002.avif">\n</div>',
+    )
+    downloader = MixedResultDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+                "https://www.bilimanga.net/read/285/24328.html": reader_html_2_partial,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url("https://www.bilimanga.net/detail/285.html")
+
+    assert summary.downloaded == 3
+    assert summary.failed == 1
+    assert summary.partial == 1
+    assert summary.total_bytes > 0
+    assert summary.issues[0].chapter_title == "第１卷 STAGE.２ 再會⋯⋯"
+    assert summary.issues[0].kind == "partial"
+
+
+async def test_download_url_applies_chapter_selection_and_filters(tmp_path: Path) -> None:
+    downloader = FakeDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+                "https://www.bilimanga.net/read/285/24328.html": READER_HTML_2,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url(
+        "https://www.bilimanga.net/detail/285.html",
+        chapters_selection="1",
+        chapter_filters=["+再會"],
+    )
+
+    assert summary.total_chapters == 1
+    assert downloader.calls[0][1] == "第１卷 STAGE.２ 再會⋯⋯"
 
 
 async def test_load_chapter_falls_back_to_reader_when_http_has_no_images() -> None:

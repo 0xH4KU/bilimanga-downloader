@@ -45,14 +45,14 @@
 
 ## 4. CLI 與使用者工作流
 
-- [ ] 改成 `comix-dl` 類似命令面：`download`、`info`、`list`、`clean`、`history`、`doctor`、`settings`
-- [ ] 支援裸 URL 快捷下載或明確提示，不要求永遠輸入 `download`
-- [ ] 支援章節選擇：`all`、`1`、`1-5`、`1,3,5`
-- [ ] 支援章節 filter：`+keyword`、`-keyword`、undo、reset
-- [ ] 支援 `--format pdf|cbz|both`、`--output`、`--no-optimize`、`--quiet`、`--debug`
-- [ ] 用 Rich table/panel 顯示 series metadata、chapter list、download progress、summary
-- [ ] `doctor` 檢查 Python、依賴、Chrome/Playwright、output dir、bilimanga URL probe
-- [ ] 補 CLI flow tests，避免互動流程和 non-interactive 流程分叉
+- [x] 改成 `comix-dl` 類似命令面：`download`、`info`、`list`、`clean`、`history`、`doctor`、`settings`
+- [x] 支援裸 URL 快捷下載或明確提示，不要求永遠輸入 `download`
+- [x] 支援章節選擇：`all`、`1`、`1-5`、`1,3,5`
+- [x] 支援章節 filter：`+keyword`、`-keyword`、undo、reset
+- [x] 支援 `--format pdf|cbz|both`、`--output`、`--no-optimize`、`--quiet`、`--debug`
+- [x] 用 Rich table/panel 顯示 series metadata、chapter list、download progress、summary
+- [x] `doctor` 檢查 Python、依賴、Chrome/Playwright、output dir、bilimanga URL probe
+- [x] 補 CLI flow tests，避免互動流程和 non-interactive 流程分叉
 
 ## 5. 轉檔與清理
 

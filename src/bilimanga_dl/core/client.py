@@ -11,12 +11,12 @@ from bilimanga_dl.core.errors import BrowserTimeoutError, HttpStatusError
 from bilimanga_dl.core.http import BilimangaHttpClient
 from bilimanga_dl.core.models import Chapter, Series, Volume
 from bilimanga_dl.core.reader import PlaywrightBrowser
+from bilimanga_dl.core.reporting import DownloadIssue
+from bilimanga_dl.core.selection import apply_chapter_filters, parse_chapter_selection
 from bilimanga_dl.sites.bilimanga import BilimangaParser
 
 if TYPE_CHECKING:
     from types import TracebackType
-
-    from bilimanga_dl.core.reporting import DownloadIssue
 
 
 @dataclass(frozen=True)
@@ -182,6 +182,8 @@ class BilimangaClient:
         *,
         chapter_limit: int | None = None,
         image_limit: int | None = None,
+        chapters_selection: str = "all",
+        chapter_filters: list[str] | None = None,
     ) -> DownloadSummary:
         """Download a series, volume, or chapter URL."""
         parsed = self._parser.parse_url(url)
@@ -198,6 +200,9 @@ class BilimangaClient:
 
         if chapter_limit is not None:
             chapters = chapters[:chapter_limit]
+        if chapter_filters:
+            chapters = apply_chapter_filters(chapters, chapter_filters)
+        chapters = parse_chapter_selection(chapters_selection, chapters)
 
         results: list[DownloadResult] = []
         resolved_series_title = series_title
@@ -221,6 +226,10 @@ class BilimangaClient:
             downloaded=sum(result.downloaded for result in results),
             skipped=sum(result.skipped for result in results),
             output_dir=self.output_dir,
+            partial=sum(1 for result in results if result.status == "partial"),
+            failed=sum(result.failed for result in results),
+            total_bytes=sum(_chapter_bytes(result.chapter_dir) for result in results),
+            issues=_issues_from_results(results),
         )
 
     async def _chapters_from_series(self, url: str) -> tuple[str, list[Chapter]]:
@@ -241,3 +250,34 @@ class BilimangaClient:
         if " " in chapter.title:
             return chapter.title.split(" ", 1)[0]
         return "bilimanga"
+
+
+def _chapter_bytes(chapter_dir: Path) -> int:
+    if not chapter_dir.exists():
+        return 0
+    return sum(path.stat().st_size for path in chapter_dir.iterdir() if path.is_file())
+
+
+def _issues_from_results(results: list[DownloadResult]) -> tuple[DownloadIssue, ...]:
+    issues: list[DownloadIssue] = []
+    for result in results:
+        if result.status == "complete" or result.status == "skipped":
+            continue
+        chapter_title = result.chapter_dir.name
+        if result.status == "failed":
+            issues.append(
+                DownloadIssue(
+                    chapter_title=chapter_title,
+                    kind="failed",
+                    message="all image downloads failed",
+                )
+            )
+            continue
+        issues.append(
+            DownloadIssue(
+                chapter_title=chapter_title,
+                kind="partial",
+                message=f"{result.failed}/{result.total} image(s) failed",
+            )
+        )
+    return tuple(issues)
