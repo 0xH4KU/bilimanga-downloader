@@ -56,12 +56,12 @@
 
 ## 5. 轉檔與清理
 
-- [ ] 移植 `core/converters.py`：CBZ、PDF、both
-- [ ] 支援 WebP optimization，並保留 `--no-optimize`
-- [ ] 大 PDF 使用 batch merge，預設依賴 `pypdf`
-- [ ] 只有完整 chapter 才能轉檔；partial chapter 保留 raw images 和 state file
-- [ ] 移植 cleanup usecase：只刪除已成功轉檔且 `.complete` 存在的 raw image dir
-- [ ] 補 converter tests：空目錄、壞圖、大批量 PDF、both、optimization
+- [x] 移植 `core/converters.py`：CBZ、PDF、both
+- [x] 支援 WebP optimization，並保留 `--no-optimize`
+- [x] 大 PDF 使用 batch merge，預設依賴 `pypdf`
+- [x] 只有完整 chapter 才能轉檔；partial chapter 保留 raw images 和 state file
+- [x] 移植 cleanup usecase：只刪除已成功轉檔且 `.complete` 存在的 raw image dir
+- [x] 補 converter tests：空目錄、壞圖、大批量 PDF、both、optimization
 
 ## 6. 設定、歷史、通知與報告
 
