@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self
 
 from bilimanga_dl.core.downloader import DownloadResult, ImageDownloader
+from bilimanga_dl.core.errors import BrowserTimeoutError, HttpStatusError
 from bilimanga_dl.core.http import BilimangaHttpClient
 from bilimanga_dl.core.models import Chapter, Series, Volume
 from bilimanga_dl.core.reader import PlaywrightBrowser
@@ -118,13 +119,25 @@ class BilimangaClient:
 
     async def load_chapter(self, url: str) -> Chapter:
         """Fetch and parse a reader page, rendering only when HTTP is blocked."""
-        html = await self._http.get_text(url)
+        html = await self.fetch_page(url)
+        return self._parser.parse_reader(html, url)
+
+    async def fetch_page(self, url: str) -> str:
+        """Engine-facing page fetch API with reader-page render fallback."""
+        parsed = self._parser.parse_url(url)
+        try:
+            html = await self._http.get_text(url)
+        except HttpStatusError as exc:
+            if parsed.kind == "chapter" and exc.status_code in {403, 429}:
+                return await self._render_reader_page(url, context="reader fallback")
+            raise
+        if parsed.kind != "chapter":
+            return html
+
         chapter = self._parser.parse_reader(html, url)
         if chapter.image_urls:
-            return chapter
-        reader = await self._ensure_reader()
-        html = await reader.render(url)
-        return self._parser.parse_reader(html, url)
+            return html
+        return await self._render_reader_page(url, context="reader fallback")
 
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
         """Downloader-facing byte fetch API."""
@@ -134,9 +147,28 @@ class BilimangaClient:
         """Fetch image bytes via HTTP, falling back to browser image loading."""
         try:
             return await self._http.get_bytes(url, referer=referer)
-        except Exception:
-            reader = await self._ensure_reader()
+        except HttpStatusError as exc:
+            if exc.status_code not in {403, 429}:
+                raise
+            return await self._fetch_image_with_reader(url, referer=referer)
+        except RuntimeError as exc:
+            if "HTTP 403" not in str(exc) and "403 Forbidden" not in str(exc):
+                raise
+            return await self._fetch_image_with_reader(url, referer=referer)
+
+    async def _render_reader_page(self, url: str, *, context: str) -> str:
+        reader = await self._ensure_reader()
+        try:
+            return await reader.render(url)
+        except TimeoutError as exc:
+            raise BrowserTimeoutError(f"Timed out during {context}: {url}") from exc
+
+    async def _fetch_image_with_reader(self, url: str, *, referer: str | None = None) -> bytes:
+        reader = await self._ensure_reader()
+        try:
             return await reader.fetch_image(url, referer=referer)
+        except TimeoutError as exc:
+            raise BrowserTimeoutError(f"Timed out fetching image with browser: {url}") from exc
 
     async def download_url(
         self,

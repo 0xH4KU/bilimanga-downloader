@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from bilimanga_dl.core.client import BilimangaClient
 from bilimanga_dl.core.downloader import DownloadResult
+from bilimanga_dl.core.errors import BrowserTimeoutError, HttpStatusError
 
 DETAIL_HTML = """
 <html><body>
@@ -95,6 +98,23 @@ class FakeReaderRenderer:
 
     async def fetch_image(self, url: str, *, referer: str | None = None) -> bytes:
         return b"browser-image"
+
+
+class TimeoutReaderRenderer(FakeReaderRenderer):
+    async def render(self, url: str) -> str:
+        raise TimeoutError("reader took too long")
+
+
+class StatusFailingHttpClient(FakeHttpClient):
+    async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
+        self.byte_urls.append(url)
+        raise HttpStatusError(status_code=500, url=url)
+
+
+class ForbiddenPageHttpClient(FakeHttpClient):
+    async def get_text(self, url: str, *, referer: str | None = None) -> str:
+        self.text_urls.append(url)
+        raise HttpStatusError(status_code=403, url=url)
 
 
 class FakeDownloader:
@@ -224,3 +244,81 @@ async def test_client_image_bytes_fall_back_to_reader_after_http_failure() -> No
 
     assert body == b"browser-image"
     assert http.byte_urls == ["https://i.motiezw.com/0/285/24327/524971.avif"]
+
+
+async def test_client_fetch_page_uses_http_when_reader_html_contains_images() -> None:
+    http = FakeHttpClient({"https://www.bilimanga.net/read/285/24327.html": READER_HTML_1})
+    reader = FakeReaderRenderer({})
+    client = BilimangaClient(http_client=http, reader=reader)
+
+    html = await client.fetch_page("https://www.bilimanga.net/read/285/24327.html")
+
+    assert html == READER_HTML_1
+    assert reader.urls == []
+
+
+async def test_client_fetch_page_falls_back_to_reader_when_reader_html_has_no_images() -> None:
+    blocked_html = """
+    <html><body>
+    <script>
+    var ReadParams={
+      mangaid:'285',
+      manganame:'新世紀福音戰士 完全版',
+      chapterid:'24327',
+      chaptername:'第１卷 STAGE.１ 使徒、來襲'
+    }
+    </script>
+    <div id="acontentz"><center>抱歉，章節不支持桌面電腦端瀏覽器顯示</center></div>
+    </body></html>
+    """
+    http = FakeHttpClient({"https://www.bilimanga.net/read/285/24327.html": blocked_html})
+    reader = FakeReaderRenderer({"https://www.bilimanga.net/read/285/24327.html": READER_HTML_1})
+    client = BilimangaClient(http_client=http, reader=reader)
+
+    html = await client.fetch_page("https://www.bilimanga.net/read/285/24327.html")
+
+    assert html == READER_HTML_1
+    assert reader.urls == ["https://www.bilimanga.net/read/285/24327.html"]
+
+
+async def test_client_fetch_page_falls_back_to_reader_after_forbidden_http_status() -> None:
+    http = ForbiddenPageHttpClient({})
+    reader = FakeReaderRenderer({"https://www.bilimanga.net/read/285/24327.html": READER_HTML_1})
+    client = BilimangaClient(http_client=http, reader=reader)
+
+    html = await client.fetch_page("https://www.bilimanga.net/read/285/24327.html")
+
+    assert html == READER_HTML_1
+    assert reader.urls == ["https://www.bilimanga.net/read/285/24327.html"]
+
+
+async def test_client_get_bytes_falls_back_only_for_forbidden_http_status() -> None:
+    http = StatusFailingHttpClient({})
+    reader = FakeReaderRenderer({})
+    client = BilimangaClient(http_client=http, reader=reader)
+
+    with pytest.raises(HttpStatusError) as exc_info:
+        await client.get_bytes("https://i.motiezw.com/0/285/24327/524971.avif")
+
+    assert exc_info.value.status_code == 500
+
+
+async def test_client_fetch_page_wraps_reader_timeout() -> None:
+    blocked_html = """
+    <html><body>
+    <script>
+    var ReadParams={
+      mangaid:'285',
+      manganame:'新世紀福音戰士 完全版',
+      chapterid:'24327',
+      chaptername:'第１卷 STAGE.１ 使徒、來襲'
+    }
+    </script>
+    <div id="acontentz"><center>抱歉，章節不支持桌面電腦端瀏覽器顯示</center></div>
+    </body></html>
+    """
+    http = FakeHttpClient({"https://www.bilimanga.net/read/285/24327.html": blocked_html})
+    client = BilimangaClient(http_client=http, reader=TimeoutReaderRenderer({}))
+
+    with pytest.raises(BrowserTimeoutError, match="reader fallback"):
+        await client.fetch_page("https://www.bilimanga.net/read/285/24327.html")

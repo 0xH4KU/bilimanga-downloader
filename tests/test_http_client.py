@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 
+from bilimanga_dl.core.errors import HttpStatusError, HttpTimeoutError
 from bilimanga_dl.core.http import BilimangaHttpClient
 
 
@@ -46,3 +48,26 @@ async def test_get_bytes_sends_referer_when_provided() -> None:
 
     assert body == b"image"
     assert seen_headers["referer"] == "https://www.bilimanga.net/read/285/24327.html"
+
+
+async def test_get_text_wraps_http_status_errors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, request=request, text="forbidden")
+
+    transport = httpx.MockTransport(handler)
+    async with BilimangaHttpClient(transport=transport) as client:
+        with pytest.raises(HttpStatusError) as exc_info:
+            await client.get_text("https://www.bilimanga.net/detail/285.html")
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.url == "https://www.bilimanga.net/detail/285.html"
+
+
+async def test_get_bytes_wraps_http_timeouts() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    transport = httpx.MockTransport(handler)
+    async with BilimangaHttpClient(transport=transport) as client:
+        with pytest.raises(HttpTimeoutError, match="timed out"):
+            await client.get_bytes("https://i.motiezw.com/0/285/24327/524971.avif")

@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Self
 
 import httpx
 
+from bilimanga_dl.core.errors import HttpStatusError, HttpTimeoutError, HttpTransportError
+
 if TYPE_CHECKING:
     from types import TracebackType
 
@@ -58,12 +60,22 @@ class BilimangaHttpClient:
 
     async def get_text(self, url: str, *, referer: str | None = None) -> str:
         headers = {"Referer": referer} if referer else None
-        response = await self._client.get(url, headers=headers)
-        response.raise_for_status()
+        response = await self._request(url, headers=headers)
         return response.text
 
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
         headers = {"Referer": referer} if referer else None
-        response = await self._client.get(url, headers=headers)
-        response.raise_for_status()
+        response = await self._request(url, headers=headers)
         return response.content
+
+    async def _request(self, url: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
+        try:
+            response = await self._client.get(url, headers=headers)
+            response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            raise HttpTimeoutError(url=url, message=f"HTTP request timed out for {url}.") from exc
+        except httpx.HTTPStatusError as exc:
+            raise HttpStatusError(status_code=exc.response.status_code, url=url) from exc
+        except httpx.RequestError as exc:
+            raise HttpTransportError(url=url, message=str(exc) or None) from exc
+        return response

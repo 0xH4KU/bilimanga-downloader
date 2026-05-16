@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import platform
+
+import pytest
+
+from bilimanga_dl.core import runtime
+from bilimanga_dl.core.errors import BrowserTimeoutError
 from bilimanga_dl.core.reader import PlaywrightReaderRenderer
 
 
@@ -87,3 +93,43 @@ async def test_playwright_reader_renderer_can_fetch_image_response_body() -> Non
     assert body == b"image"
     assert page.goto_calls == [("https://www.bilimanga.net/read/285/24327.html", "domcontentloaded", 1234)]
     assert page.closed is True
+
+
+class TimeoutPage(FakePage):
+    async def wait_for_selector(self, selector: str, *, timeout: int) -> None:
+        raise TimeoutError("selector timeout")
+
+
+async def test_playwright_reader_renderer_wraps_timeouts() -> None:
+    page = TimeoutPage()
+    renderer = PlaywrightReaderRenderer(context=FakeContext(page), timeout_ms=1234)
+
+    with pytest.raises(BrowserTimeoutError, match="rendering reader page"):
+        await renderer.render("https://www.bilimanga.net/read/285/24327.html")
+
+
+def test_detect_chrome_path_uses_known_macos_path(monkeypatch) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr("bilimanga_dl.core.runtime.Path.exists", lambda self: str(self).startswith("/Applications"))
+
+    assert runtime.detect_chrome_path() == "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def test_detect_chrome_path_uses_linux_path_from_path(monkeypatch) -> None:
+    def fake_which(name: str) -> str | None:
+        return f"/usr/bin/{name}" if name == "chromium" else None
+
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(runtime.shutil, "which", fake_which)
+
+    assert runtime.detect_chrome_path() == "/usr/bin/chromium"
+
+
+def test_detect_chrome_path_uses_windows_default(monkeypatch) -> None:
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    monkeypatch.delenv("PROGRAMFILES(X86)", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
+
+    assert runtime.detect_chrome_path() == "chrome.exe"

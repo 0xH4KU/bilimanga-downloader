@@ -7,7 +7,9 @@ import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from bilimanga_dl.core.errors import BrowserTimeoutError
 from bilimanga_dl.core.http import ANDROID_CHROME_UA
+from bilimanga_dl.core.runtime import detect_chrome_path
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -32,8 +34,11 @@ class PlaywrightReaderRenderer:
     async def render(self, url: str) -> str:
         page = await self._context.new_page()
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
-            await page.wait_for_selector(IMAGE_SELECTOR, timeout=self._timeout_ms)
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=self._timeout_ms)
+                await page.wait_for_selector(IMAGE_SELECTOR, timeout=self._timeout_ms)
+            except TimeoutError as exc:
+                raise BrowserTimeoutError(f"Timed out rendering reader page: {url}") from exc
             return await page.content()
         finally:
             await page.close()
@@ -72,7 +77,10 @@ class PlaywrightReaderRenderer:
                 await asyncio.sleep(0.05)
             if response_task is None:
                 raise TimeoutError(f"Timed out waiting for image response: {url}")
-            return await asyncio.wait_for(response_task, timeout=self._timeout_ms / 1000)
+            try:
+                return await asyncio.wait_for(response_task, timeout=self._timeout_ms / 1000)
+            except TimeoutError as exc:
+                raise BrowserTimeoutError(f"Timed out loading image response: {url}") from exc
         finally:
             await page.close()
 
@@ -88,7 +96,7 @@ class PlaywrightBrowser:
         timeout_ms: int = 30_000,
     ) -> None:
         self._headless = headless
-        self._chrome_path = chrome_path or DEFAULT_CHROME_PATH
+        self._chrome_path = chrome_path or detect_chrome_path()
         self._timeout_ms = timeout_ms
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None

@@ -36,12 +36,12 @@
 
 ## 3. 瀏覽器與 HTTP runtime
 
-- [ ] 把目前 `BilimangaHttpClient` 保留為第一優先 transport，因為 bilimanga 不一定需要 full CDP runtime
-- [ ] 將 Playwright reader fallback 收斂成 Engine method：`fetch_page()` / `get_bytes()`
-- [ ] 補明確 timeout 與 typed errors，避免 HTTP/render/image fetch 失敗只靠裸 `Exception`
-- [ ] 增加 Chrome 路徑 autodetect：macOS、Linux、Windows
+- [x] 把目前 `BilimangaHttpClient` 保留為第一優先 transport，因為 bilimanga 不一定需要 full CDP runtime
+- [x] 將 Playwright reader fallback 收斂成 Engine method：`fetch_page()` / `get_bytes()`
+- [x] 補明確 timeout 與 typed errors，避免 HTTP/render/image fetch 失敗只靠裸 `Exception`
+- [x] 增加 Chrome 路徑 autodetect：macOS、Linux、Windows
 - [ ] 視真站阻擋情況決定是否需要 persistent browser profile、single-instance lock、stale Chrome cleanup
-- [ ] 補 reader fallback 測試：HTTP 無圖片時 render，HTTP 圖片失敗時 browser fetch image
+- [x] 補 reader fallback 測試：HTTP 無圖片時 render，HTTP 圖片失敗時 browser fetch image
 
 ## 4. CLI 與使用者工作流
 
