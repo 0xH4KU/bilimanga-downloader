@@ -16,12 +16,12 @@
 
 ## 1. 先搬共用框架，不急著改解析器
 
-- [ ] 從 `comix-downloader` 移植站點無關的核心模型：`SearchResult`、`ChapterInfo`、`ChapterImages`、`SeriesInfo`、`DedupDecision`
-- [ ] 移植 `sites/base.py` 的 `Engine` / `SiteAdapter` protocol，並調整 `chapter_id` 型別以兼容 bilimanga 的數字 ID
-- [ ] 建立 `sites/__init__.py` registry，讓 CLI/application 只依賴 active adapter
-- [ ] 把現有 `BilimangaParser` 包成 `BilimangaAdapter`，保留目前 detail/volume/read URL 支援
-- [ ] 增加 adapter conformance tests，確保 bilimanga adapter 具備 search/get_series/get_chapter_images/deduplicate/probe_alive 的穩定契約
-- [ ] 評估是否需要 search：如果 bilimanga 沒有可靠搜尋入口，先實作 URL/ID resolve，search command 回傳明確不支援訊息
+- [x] 從 `comix-downloader` 移植站點無關的核心模型：`SearchResult`、`ChapterInfo`、`ChapterImages`、`SeriesInfo`、`DedupDecision`
+- [x] 移植 `sites/base.py` 的 `Engine` / `SiteAdapter` protocol，並調整 `chapter_id` 型別以兼容 bilimanga 的數字 ID
+- [x] 建立 `sites/__init__.py` registry，讓 CLI/application 只依賴 active adapter
+- [x] 把現有 `BilimangaParser` 包成 `BilimangaAdapter`，保留目前 detail/volume/read URL 支援
+- [x] 增加 adapter conformance tests，確保 bilimanga adapter 具備 search/get_series/get_chapter_images/deduplicate/probe_alive 的穩定契約
+- [x] 評估是否需要 search：如果 bilimanga 沒有可靠搜尋入口，先實作 URL/ID resolve，search command 回傳明確不支援訊息
 
 ## 2. 下載可靠性
 

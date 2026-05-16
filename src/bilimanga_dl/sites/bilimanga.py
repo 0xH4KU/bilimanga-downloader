@@ -9,11 +9,26 @@ This module owns the site-specific URL shapes and DOM extraction rules.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
-from bilimanga_dl.core.models import Chapter, ParsedUrl, Series, Volume
+from bilimanga_dl.core.models import (
+    Chapter,
+    ChapterImages,
+    ChapterInfo,
+    DedupDecision,
+    ParsedUrl,
+    SearchResult,
+    Series,
+    SeriesInfo,
+    Volume,
+)
+from bilimanga_dl.sites import register
+
+if TYPE_CHECKING:
+    from bilimanga_dl.sites.base import Engine
 
 _DETAIL_RE = re.compile(r"^/detail/(?P<manga>\d+)\.html$")
 _VOLUME_RE = re.compile(r"^/detail/(?P<manga>\d+)/vol_(?P<volume>\d+)\.html$")
@@ -155,6 +170,95 @@ class BilimangaParser:
         return _dedupe_chapters(chapters)
 
 
+class BilimangaAdapter:
+    """Site adapter wrapper around the existing bilimanga parser."""
+
+    name = "bilimanga.net"
+    needs_browser = False
+
+    def __init__(self, *, base_url: str = "https://www.bilimanga.net") -> None:
+        self.base_url = base_url.rstrip("/")
+        self.parser = BilimangaParser(base_url=self.base_url)
+        self.mirrors = [self.base_url]
+        self._chapter_urls: dict[int, str] = {}
+
+    def matches_url(self, url: str) -> bool:
+        return self.parser.parse_url(url).kind != "unknown"
+
+    def parse_identifier(self, url_or_slug: str) -> str | None:
+        value = url_or_slug.strip()
+        if not value:
+            return None
+        if value.isdigit():
+            return value
+        parsed = self.parser.parse_url(value)
+        if parsed.manga_id is None:
+            return None
+        return str(parsed.manga_id)
+
+    async def on_engine_ready(self, engine: Engine) -> None:
+        return None
+
+    async def probe_alive(self, engine: Engine) -> bool:
+        try:
+            await engine.fetch_page(f"{self.base_url}/detail/285.html")
+        except Exception:
+            return False
+        return True
+
+    async def search(self, engine: Engine, query: str, *, limit: int = 20) -> list[SearchResult]:
+        return []
+
+    async def get_series(self, engine: Engine, identifier: str) -> SeriesInfo:
+        if not identifier.isdigit():
+            raise ValueError(f"Not a bilimanga series id: {identifier}")
+        detail_url = f"{self.base_url}/detail/{identifier}.html"
+        detail_html = await engine.fetch_page(detail_url)
+        series = self.parser.parse_series_detail(detail_html, detail_url)
+
+        chapters: list[ChapterInfo] = []
+        for volume in series.volumes:
+            volume_html = await engine.fetch_page(volume.url)
+            hydrated = self.parser.parse_volume(volume_html, volume.url)
+            for chapter in hydrated.chapters:
+                self._chapter_urls[chapter.chapter_id] = chapter.url
+                chapters.append(
+                    ChapterInfo(
+                        title=chapter.title,
+                        chapter_id=chapter.chapter_id,
+                        number=str(len(chapters) + 1),
+                        language="zh",
+                    )
+                )
+
+        return SeriesInfo(
+            title=series.title,
+            authors=series.authors,
+            genres=series.genres,
+            description=series.description,
+            chapters=chapters,
+            url=series.url,
+            hash_id=str(series.manga_id),
+        )
+
+    async def get_chapter_images(self, engine: Engine, chapter_id: int) -> ChapterImages | None:
+        url = self._chapter_urls.get(chapter_id)
+        if url is None:
+            return None
+        html = await engine.fetch_page(url)
+        chapter = self.parser.parse_reader(html, url)
+        if not chapter.image_urls:
+            return None
+        return ChapterImages(
+            title=chapter.title,
+            chapter_label=chapter.title,
+            image_urls=chapter.image_urls,
+        )
+
+    def deduplicate(self, chapters: list[ChapterInfo]) -> tuple[list[ChapterInfo], list[DedupDecision]]:
+        return chapters, []
+
+
 def _text_one(scope: BeautifulSoup | Tag, selector: str) -> str:
     element = scope.select_one(selector)
     return _clean_text(element.get_text("\n")) if element else ""
@@ -222,3 +326,6 @@ def _extract_read_params(soup: BeautifulSoup) -> dict[str, str]:
             continue
         return {match.group("key"): match.group("value") for match in _READ_PARAMS_FIELD_RE.finditer(text)}
     return {}
+
+
+register(BilimangaAdapter())
