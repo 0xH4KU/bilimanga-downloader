@@ -9,10 +9,10 @@
 - [x] 補 GitHub Actions CI：ruff、mypy、docs consistency、Python 3.11-3.14 測試矩陣、coverage gate
 - [x] 補 release workflow：tag build sdist/wheel，PyPI token 存在時發布
 - [x] 補 `scripts/check_docs_consistency.py`，檢查 README badge、`pyproject.toml`、`__init__.py` 版本一致
-- [ ] 補 `CONTRIBUTING.md`，把本專案的本地品質門檻和 PR 規則寫清楚
-- [ ] 補 `ARCHITECTURE.md`，記錄 bilimanga adapter 與共用 runtime 的邊界
-- [ ] 補 `DEVELOPMENT.md`，記錄 venv、Playwright/Chrome、測試與真站 smoke test 流程
-- [ ] 補 `.gitignore` 的 build/coverage/mypy/dist 產物忽略規則
+- [x] 補 `CONTRIBUTING.md`，把本專案的本地品質門檻和 PR 規則寫清楚
+- [x] 補 `ARCHITECTURE.md`，記錄 bilimanga adapter 與共用 runtime 的邊界
+- [x] 補 `DEVELOPMENT.md`，記錄 venv、Playwright/Chrome、測試與真站 smoke test 流程
+- [x] 補 `.gitignore` 的 build/coverage/mypy/dist 產物忽略規則
 
 ## 1. 先搬共用框架，不急著改解析器
 
