@@ -48,6 +48,12 @@ CLI:
 .venv/bin/pytest tests/test_cli.py -q
 ```
 
+Conversion / cleanup:
+
+```bash
+.venv/bin/pytest tests/test_converters.py tests/test_cleanup.py -q
+```
+
 ## Real-Site Smoke Test
 
 CI should not depend on live `bilimanga.net` responses. Before release, run a manual smoke test with a small image limit:
@@ -64,3 +70,14 @@ Expected result:
 - `.complete` exists only when both image files were fetched
 
 If the site returns a desktop-block reader page, re-run with `--headed` so Playwright can render the mobile reader fallback.
+
+Full release smoke:
+
+```bash
+bilimanga-dl doctor
+bilimanga-dl download "https://www.bilimanga.net/read/285/24327.html" --output downloads-smoke --image-limit 2 --format cbz --no-optimize
+bilimanga-dl list
+bilimanga-dl clean --force
+```
+
+Do not commit `downloads-smoke/`.

@@ -31,7 +31,7 @@
 - [x] Resume 時驗證既有圖片有效性，壞檔/空檔自動刪除重抓
 - [x] 加入 partial semantics：部分失敗不寫 `.complete`，寫入 `chapter.state.json`
 - [x] 加入 path traversal 防護，確保 sanitize 後的輸出路徑不逃出 output dir
-- [ ] 失敗摘要要能區分 missing images、all failed、partial failed、conversion failed
+- [x] 失敗摘要要能區分 missing images、all failed、partial failed、conversion failed
 - [x] 補 downloader 測試覆蓋 complete/skip/partial/retry/corrupt-file/path-escape
 
 ## 3. 瀏覽器與 HTTP runtime
@@ -40,7 +40,7 @@
 - [x] 將 Playwright reader fallback 收斂成 Engine method：`fetch_page()` / `get_bytes()`
 - [x] 補明確 timeout 與 typed errors，避免 HTTP/render/image fetch 失敗只靠裸 `Exception`
 - [x] 增加 Chrome 路徑 autodetect：macOS、Linux、Windows
-- [ ] 視真站阻擋情況決定是否需要 persistent browser profile、single-instance lock、stale Chrome cleanup
+- [ ] 視真站阻擋情況決定是否需要 persistent browser profile、single-instance lock、stale Chrome cleanup（後續實站阻擋時再啟用，不列入目前 parity gate）
 - [x] 補 reader fallback 測試：HTTP 無圖片時 render，HTTP 圖片失敗時 browser fetch image
 
 ## 4. CLI 與使用者工作流
@@ -74,19 +74,19 @@
 
 ## 7. 文件與發布
 
-- [ ] README 補完整 features、平台支援、安裝、互動/非互動用法、設定、診斷、工作原理
-- [ ] 補 install.sh / install.ps1，流程參考 `comix-downloader`
-- [ ] 補 release checklist：版本 bump、docs consistency、full gate、tag、release
-- [ ] 補 migration note：從目前 MVP CLI 到完整 CLI 的破壞性/兼容性變更
-- [ ] 補真站 smoke test 手順，避免 CI 依賴外站但人工 release 前可驗證
+- [x] README 補完整 features、平台支援、安裝、互動/非互動用法、設定、診斷、工作原理
+- [x] 補 install.sh / install.ps1，流程參考 `comix-downloader`
+- [x] 補 release checklist：版本 bump、docs consistency、full gate、tag、release
+- [x] 補 migration note：從目前 MVP CLI 到完整 CLI 的破壞性/兼容性變更
+- [x] 補真站 smoke test 手順，避免 CI 依賴外站但人工 release 前可驗證
 
 ## 8. 驗收標準
 
-- [ ] `ruff check .` 通過
-- [ ] `mypy src/bilimanga_dl --no-error-summary` 通過
-- [ ] `pytest --cov=bilimanga_dl --cov-report=term-missing --cov-fail-under=70` 通過
-- [ ] `bilimanga-dl doctor` 在本機能給出可理解診斷
-- [ ] URL download 可下載 detail/volume/read 三種 URL
-- [ ] 中斷或部分失敗後 rerun 能 resume，不轉檔 partial chapter
-- [ ] 完整 chapter 可輸出 pdf/cbz/both
-- [ ] README 中列出的每個命令都有對應測試或 smoke test 手順
+- [x] `ruff check .` 通過
+- [x] `mypy src/bilimanga_dl --no-error-summary` 通過
+- [x] `pytest --cov=bilimanga_dl --cov-report=term-missing --cov-fail-under=70` 通過
+- [x] `bilimanga-dl doctor` 在本機能給出可理解診斷
+- [x] URL download 可下載 detail/volume/read 三種 URL
+- [x] 中斷或部分失敗後 rerun 能 resume，不轉檔 partial chapter
+- [x] 完整 chapter 可輸出 pdf/cbz/both
+- [x] README 中列出的每個命令都有對應測試或 smoke test 手順
