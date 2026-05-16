@@ -105,6 +105,14 @@ class TimeoutReaderRenderer(FakeReaderRenderer):
         raise TimeoutError("reader took too long")
 
 
+class FailingChapterHttpClient(FakeHttpClient):
+    async def get_text(self, url: str, *, referer: str | None = None) -> str:
+        self.text_urls.append(url)
+        if url == "https://www.bilimanga.net/read/285/24328.html":
+            raise HttpStatusError(status_code=403, url=url)
+        return self.pages[url]
+
+
 class StatusFailingHttpClient(FakeHttpClient):
     async def get_bytes(self, url: str, *, referer: str | None = None) -> bytes:
         self.byte_urls.append(url)
@@ -282,6 +290,33 @@ async def test_download_url_records_missing_images_issue(tmp_path: Path) -> None
     assert summary.issues[0].chapter_title == "第１卷 STAGE.１ 使徒、來襲"
     assert summary.issues[0].kind == "missing_images"
     assert summary.issues[0].message == "no images found on reader page"
+
+
+async def test_download_url_records_chapter_load_failure_and_continues(tmp_path: Path) -> None:
+    downloader = FakeDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FailingChapterHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+            }
+        ),
+        reader=TimeoutReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url("https://www.bilimanga.net/detail/285.html")
+
+    assert summary.total_chapters == 2
+    assert summary.downloaded == 2
+    assert summary.failed == 1
+    assert downloader.calls[0][1] == "第１卷 STAGE.１ 使徒、來襲"
+    assert len(downloader.calls) == 1
+    assert summary.issues[0].chapter_title == "STAGE.２ 再會⋯⋯"
+    assert summary.issues[0].kind == "chapter_failed"
+    assert "Timed out" in summary.issues[0].message
 
 
 async def test_download_url_applies_chapter_selection_and_filters(tmp_path: Path) -> None:

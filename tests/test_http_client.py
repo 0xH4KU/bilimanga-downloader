@@ -71,3 +71,21 @@ async def test_get_bytes_wraps_http_timeouts() -> None:
     async with BilimangaHttpClient(transport=transport) as client:
         with pytest.raises(HttpTimeoutError, match="timed out"):
             await client.get_bytes("https://i.motiezw.com/0/285/24327/524971.avif")
+
+
+async def test_get_text_retries_transient_transport_errors() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("temporary connect failure", request=request)
+        return httpx.Response(200, text="<html>ok</html>")
+
+    transport = httpx.MockTransport(handler)
+    async with BilimangaHttpClient(transport=transport, retry_delay=0) as client:
+        text = await client.get_text("https://www.bilimanga.net/read/285/24328.html")
+
+    assert text == "<html>ok</html>"
+    assert attempts == 2

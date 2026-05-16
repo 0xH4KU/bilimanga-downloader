@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Self
 
 import httpx
@@ -25,8 +26,12 @@ class BilimangaHttpClient:
         self,
         *,
         timeout: float = 30.0,
+        max_retries: int = 3,
+        retry_delay: float = 0.5,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        self._max_retries = max(0, max_retries)
+        self._retry_delay = max(0.0, retry_delay)
         self.headers = {
             "User-Agent": ANDROID_CHROME_UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -69,13 +74,22 @@ class BilimangaHttpClient:
         return response.content
 
     async def _request(self, url: str, *, headers: dict[str, str] | None = None) -> httpx.Response:
-        try:
-            response = await self._client.get(url, headers=headers)
-            response.raise_for_status()
-        except httpx.TimeoutException as exc:
-            raise HttpTimeoutError(url=url, message=f"HTTP request timed out for {url}.") from exc
-        except httpx.HTTPStatusError as exc:
-            raise HttpStatusError(status_code=exc.response.status_code, url=url) from exc
-        except httpx.RequestError as exc:
-            raise HttpTransportError(url=url, message=str(exc) or None) from exc
-        return response
+        last_error: httpx.RequestError | None = None
+        for attempt in range(self._max_retries + 1):
+            try:
+                response = await self._client.get(url, headers=headers)
+                response.raise_for_status()
+                return response
+            except httpx.TimeoutException as exc:
+                last_error = exc
+            except httpx.HTTPStatusError as exc:
+                raise HttpStatusError(status_code=exc.response.status_code, url=url) from exc
+            except httpx.RequestError as exc:
+                last_error = exc
+
+            if attempt < self._max_retries and self._retry_delay > 0:
+                await asyncio.sleep(self._retry_delay * (2**attempt))
+
+        if isinstance(last_error, httpx.TimeoutException):
+            raise HttpTimeoutError(url=url, message=f"HTTP request timed out for {url}.") from last_error
+        raise HttpTransportError(url=url, message=str(last_error) or None) from last_error

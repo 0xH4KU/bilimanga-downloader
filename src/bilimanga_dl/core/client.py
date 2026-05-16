@@ -208,26 +208,36 @@ class BilimangaClient:
         issues: list[DownloadIssue] = []
         resolved_series_title = series_title
         for chapter_stub in chapters:
-            chapter = await self.load_chapter(chapter_stub.url)
-            if not resolved_series_title:
-                resolved_series_title = chapter.series_title or self._infer_series_title(chapter)
-            image_urls = chapter.image_urls[:image_limit] if image_limit is not None else chapter.image_urls
-            if not image_urls:
+            try:
+                chapter = await self.load_chapter(chapter_stub.url)
+                if not resolved_series_title:
+                    resolved_series_title = chapter.series_title or self._infer_series_title(chapter)
+                image_urls = chapter.image_urls[:image_limit] if image_limit is not None else chapter.image_urls
+                if not image_urls:
+                    issues.append(
+                        DownloadIssue(
+                            chapter_title=chapter.title,
+                            kind="missing_images",
+                            message="no images found on reader page",
+                        )
+                    )
+                    continue
+                result = await self._downloader.download_images(
+                    resolved_series_title,
+                    chapter.title,
+                    image_urls,
+                    referer=chapter.url,
+                )
+                results.append(result)
+            except Exception as exc:
                 issues.append(
                     DownloadIssue(
-                        chapter_title=chapter.title,
-                        kind="missing_images",
-                        message="no images found on reader page",
+                        chapter_title=chapter_stub.title or chapter_stub.url,
+                        kind="chapter_failed",
+                        message=str(exc) or exc.__class__.__name__,
                     )
                 )
                 continue
-            result = await self._downloader.download_images(
-                resolved_series_title,
-                chapter.title,
-                image_urls,
-                referer=chapter.url,
-            )
-            results.append(result)
 
         return DownloadSummary(
             series_title=resolved_series_title or "bilimanga",
