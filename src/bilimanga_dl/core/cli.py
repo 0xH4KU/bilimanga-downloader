@@ -13,7 +13,7 @@ from rich.table import Table
 
 from bilimanga_dl.core.cleanup import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
 from bilimanga_dl.core.client import BilimangaClient, DownloadSummary
-from bilimanga_dl.core.converters import convert
+from bilimanga_dl.core.converters import convert, to_collection_cbz
 from bilimanga_dl.core.errors import ConversionError
 from bilimanga_dl.core.history import HistoryRepository
 from bilimanga_dl.core.reporting import DownloadIssue, build_download_report, format_bytes, format_download_counts
@@ -52,8 +52,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Chapter filter: +keyword/-keyword",
     )
     download.add_argument("-f", "--format", choices=["pdf", "cbz", "both"], default=None)
+    download.add_argument("--package", choices=["chapter", "volume", "both"], default="chapter")
     download.add_argument("-o", "--output", default=None, help="Output directory")
     download.add_argument("--no-optimize", action="store_true", help="Skip WebP optimization before conversion")
+    download.add_argument(
+        "--chapter-concurrency",
+        type=_positive_int,
+        default=None,
+        help="Number of chapters to download in parallel",
+    )
     download.add_argument("--quiet", action="store_true", help=argparse.SUPPRESS)
     download.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
     download.add_argument("--limit", type=_positive_int, default=None, help=argparse.SUPPRESS)
@@ -90,6 +97,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             image_limit=None,
             headed=False,
             format=settings.default_format,
+            package="chapter",
+            chapter_concurrency=None,
             no_optimize=not settings.optimize_images,
             quiet=False,
             debug=False,
@@ -123,6 +132,7 @@ apply_chapter_filters = _apply_chapter_filters
 
 async def _download(args: argparse.Namespace) -> int:
     settings = SettingsRepository().load()
+    tuning = SettingsRepository.resolve_download_tuning(settings)
     output = Path(args.output or settings.output_dir)
     async with BilimangaClient(output_dir=output, headless=not args.headed) as client:
         summary = await client.download_url(
@@ -131,11 +141,13 @@ async def _download(args: argparse.Namespace) -> int:
             image_limit=args.image_limit,
             chapters_selection=args.chapters,
             chapter_filters=args.filters,
+            chapter_concurrency=args.chapter_concurrency or tuning.concurrent_chapters,
         )
 
     conversion_issues = _convert_downloaded_chapters(
         summary,
         fmt=args.format or settings.default_format,
+        package_mode=args.package,
         optimize=not args.no_optimize,
     )
     if conversion_issues:
@@ -241,6 +253,7 @@ def _settings() -> int:
     console.print(f"Output: {settings.output_dir}", soft_wrap=True)
     console.print(f"Format: {settings.default_format}")
     console.print(f"Profile: {settings.concurrency_profile}")
+    console.print(f"Chapters: {tuning.concurrent_chapters}")
     console.print(f"Images: {tuning.concurrent_images}")
     console.print(f"Optimize: {settings.optimize_images}")
     return 0
@@ -287,30 +300,76 @@ def _print_summary(summary: DownloadSummary) -> None:
         console.print(line)
 
 
-def _convert_downloaded_chapters(summary: DownloadSummary, *, fmt: str, optimize: bool) -> tuple[DownloadIssue, ...]:
+def _convert_downloaded_chapters(
+    summary: DownloadSummary,
+    *,
+    fmt: str,
+    package_mode: str = "chapter",
+    optimize: bool,
+) -> tuple[DownloadIssue, ...]:
     if fmt not in {"pdf", "cbz", "both"}:
         return ()
     issues: list[DownloadIssue] = []
-    for chapter_dir in _iter_complete_chapter_dirs(summary.output_dir):
-        converted_pdf = chapter_dir.parent / f"{chapter_dir.name}.pdf"
-        converted_cbz = chapter_dir.parent / f"{chapter_dir.name}.cbz"
-        if fmt == "pdf" and converted_pdf.exists():
+    if package_mode in {"chapter", "both"}:
+        for chapter_dir in _iter_complete_chapter_dirs(summary.output_dir):
+            converted_pdf = chapter_dir.parent / f"{chapter_dir.name}.pdf"
+            converted_cbz = chapter_dir.parent / f"{chapter_dir.name}.cbz"
+            if fmt == "pdf" and converted_pdf.exists():
+                continue
+            if fmt == "cbz" and converted_cbz.exists():
+                continue
+            if fmt == "both" and converted_pdf.exists() and converted_cbz.exists():
+                continue
+            try:
+                convert(chapter_dir, fmt, optimize=optimize)
+            except ConversionError as exc:
+                issues.append(
+                    DownloadIssue(
+                        chapter_title=chapter_dir.name,
+                        kind="conversion_failed",
+                        message=f"conversion failed: {exc}",
+                    )
+                )
+    if package_mode in {"volume", "both"}:
+        if fmt == "pdf":
+            issues.append(
+                DownloadIssue(
+                    chapter_title=summary.series_title,
+                    kind="conversion_failed",
+                    message="Volume packaging only supports CBZ; use --format cbz or --format both.",
+                )
+            )
+        else:
+            issues.extend(_convert_downloaded_volumes(summary))
+    return tuple(issues)
+
+
+def _convert_downloaded_volumes(summary: DownloadSummary) -> tuple[DownloadIssue, ...]:
+    issues: list[DownloadIssue] = []
+    by_volume: dict[str, list[tuple[str, Path]]] = {}
+    for index, chapter in enumerate(summary.chapters, start=1):
+        if not (chapter.chapter_dir / ".complete").exists():
             continue
-        if fmt == "cbz" and converted_cbz.exists():
-            continue
-        if fmt == "both" and converted_pdf.exists() and converted_cbz.exists():
-            continue
+        by_volume.setdefault(chapter.volume_title, []).append((f"{index:03d} {chapter.title}", chapter.chapter_dir))
+    series_dir = summary.output_dir / _safe_path_segment(summary.series_title)
+    for volume_title, chapters in by_volume.items():
         try:
-            convert(chapter_dir, fmt, optimize=optimize)
+            to_collection_cbz(chapters, series_dir / f"{_safe_path_segment(volume_title)}.cbz")
         except ConversionError as exc:
             issues.append(
                 DownloadIssue(
-                    chapter_title=chapter_dir.name,
+                    chapter_title=volume_title,
                     kind="conversion_failed",
                     message=f"conversion failed: {exc}",
                 )
             )
     return tuple(issues)
+
+
+def _safe_path_segment(value: str) -> str:
+    unsafe_chars = '\\/*?"<>|:'
+    cleaned = value.translate(str.maketrans(unsafe_chars, " " * len(unsafe_chars)))
+    return " ".join(cleaned.replace("..", "").split()).strip(" .") or "download"
 
 
 def _summary_with_issues(summary: DownloadSummary, issues: tuple[DownloadIssue, ...]) -> DownloadSummary:
@@ -325,6 +384,7 @@ def _summary_with_issues(summary: DownloadSummary, issues: tuple[DownloadIssue, 
         failed=summary.failed + len(issues),
         total_bytes=summary.total_bytes,
         issues=(*summary.issues, *issues),
+        chapters=summary.chapters,
     )
 
 

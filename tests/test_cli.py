@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 from bilimanga_dl.core import cli
-from bilimanga_dl.core.client import DownloadSummary
+from bilimanga_dl.core.client import DownloadedChapter, DownloadSummary
 from bilimanga_dl.core.errors import ConversionError
 from bilimanga_dl.core.history import HistoryEntry
 from bilimanga_dl.core.models import ChapterInfo
@@ -18,7 +18,7 @@ class FakeClient:
     def __init__(self, *, output_dir: str | Path, headless: bool = True) -> None:
         self.output_dir = Path(output_dir)
         self.headless = headless
-        self.calls: list[tuple[str, int | None, int | None]] = []
+        self.calls: list[tuple[str, int | None, int | None, int]] = []
         FakeClient.instances.append(self)
 
     async def __aenter__(self) -> FakeClient:
@@ -35,9 +35,10 @@ class FakeClient:
         image_limit: int | None = None,
         chapters_selection: str = "all",
         chapter_filters: list[str] | None = None,
+        chapter_concurrency: int = 1,
     ) -> DownloadSummary:
         del chapters_selection, chapter_filters
-        self.calls.append((url, chapter_limit, image_limit))
+        self.calls.append((url, chapter_limit, image_limit, chapter_concurrency))
         return DownloadSummary(
             series_title="新世紀福音戰士 完全版",
             total_chapters=1,
@@ -67,8 +68,12 @@ def test_parser_supports_expected_commands_and_download_options() -> None:
             "1-2",
             "--format",
             "both",
+            "--package",
+            "volume",
             "--filter",
             "+STAGE",
+            "--chapter-concurrency",
+            "3",
             "--output",
             "/tmp/out",
             "--no-optimize",
@@ -80,6 +85,8 @@ def test_parser_supports_expected_commands_and_download_options() -> None:
     assert download.chapters == "1-2"
     assert download.filters == ["+STAGE"]
     assert download.format == "both"
+    assert download.package == "volume"
+    assert download.chapter_concurrency == 3
     assert download.output == "/tmp/out"
     assert download.no_optimize is True
     assert download.quiet is True
@@ -101,7 +108,7 @@ def test_bare_url_is_download_shortcut(monkeypatch, tmp_path: Path) -> None:
     result = cli.main(["https://www.bilimanga.net/read/285/24327.html"])
 
     assert result == 0
-    assert FakeClient.instances[0].calls == [("https://www.bilimanga.net/read/285/24327.html", None, None)]
+    assert FakeClient.instances[0].calls == [("https://www.bilimanga.net/read/285/24327.html", None, None, 2)]
 
 
 def test_download_command_passes_legacy_limits_to_client(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -118,13 +125,15 @@ def test_download_command_passes_legacy_limits_to_client(monkeypatch, tmp_path: 
             "1",
             "--image-limit",
             "2",
+            "--chapter-concurrency",
+            "4",
             "--headed",
         ]
     )
 
     assert result == 0
     assert FakeClient.instances[0].headless is False
-    assert FakeClient.instances[0].calls == [("https://www.bilimanga.net/read/285/24327.html", 1, 2)]
+    assert FakeClient.instances[0].calls == [("https://www.bilimanga.net/read/285/24327.html", 1, 2, 4)]
     assert "新世紀福音戰士 完全版" in capsys.readouterr().out
 
 
@@ -138,8 +147,9 @@ def test_download_command_reports_conversion_failure(monkeypatch, tmp_path: Path
             image_limit: int | None = None,
             chapters_selection: str = "all",
             chapter_filters: list[str] | None = None,
+            chapter_concurrency: int = 1,
         ) -> DownloadSummary:
-            del url, chapter_limit, image_limit, chapters_selection, chapter_filters
+            del url, chapter_limit, image_limit, chapters_selection, chapter_filters, chapter_concurrency
             chapter_dir = self.output_dir / "Series" / "Chapter"
             chapter_dir.mkdir(parents=True)
             (chapter_dir / ".complete").write_text("", encoding="utf-8")
@@ -174,6 +184,77 @@ def test_download_command_reports_conversion_failure(monkeypatch, tmp_path: Path
     assert result == 1
     assert "conversion failed" in output
     assert "Chapter: conversion failed: bad image" in output
+
+
+def test_download_command_can_package_by_volume(monkeypatch, tmp_path: Path) -> None:
+    class VolumeClient(FakeClient):
+        async def download_url(
+            self,
+            url: str,
+            *,
+            chapter_limit: int | None = None,
+            image_limit: int | None = None,
+            chapters_selection: str = "all",
+            chapter_filters: list[str] | None = None,
+            chapter_concurrency: int = 1,
+        ) -> DownloadSummary:
+            del url, chapter_limit, image_limit, chapters_selection, chapter_filters, chapter_concurrency
+            chapter_1 = self.output_dir / "Series" / "第１卷 STAGE.１"
+            chapter_2 = self.output_dir / "Series" / "第１卷 STAGE.２"
+            chapter_1.mkdir(parents=True)
+            chapter_2.mkdir(parents=True)
+            for chapter_dir in (chapter_1, chapter_2):
+                (chapter_dir / ".complete").touch()
+                (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+            return DownloadSummary(
+                series_title="Series",
+                total_chapters=2,
+                total_images=2,
+                downloaded=2,
+                skipped=0,
+                output_dir=self.output_dir,
+                chapters=(
+                    DownloadedChapter(title="第１卷 STAGE.１", volume_title="第１卷", chapter_dir=chapter_1),
+                    DownloadedChapter(title="第１卷 STAGE.２", volume_title="第１卷", chapter_dir=chapter_2),
+                ),
+            )
+
+    monkeypatch.setattr(cli, "BilimangaClient", VolumeClient)
+
+    result = cli.main(
+        [
+            "download",
+            "https://www.bilimanga.net/detail/285.html",
+            "--output",
+            str(tmp_path),
+            "--format",
+            "cbz",
+            "--package",
+            "volume",
+        ]
+    )
+
+    assert result == 0
+    assert (tmp_path / "Series" / "第１卷.cbz").exists()
+    assert not (tmp_path / "Series" / "第１卷 STAGE.１.cbz").exists()
+
+
+def test_volume_package_with_pdf_format_reports_conversion_issue(tmp_path: Path) -> None:
+    summary = DownloadSummary(
+        series_title="Series",
+        total_chapters=1,
+        total_images=1,
+        downloaded=1,
+        skipped=0,
+        output_dir=tmp_path,
+    )
+
+    issues = cli._convert_downloaded_chapters(summary, fmt="pdf", package_mode="volume", optimize=False)
+
+    assert len(issues) == 1
+    assert issues[0].chapter_title == "Series"
+    assert issues[0].kind == "conversion_failed"
+    assert "Volume packaging only supports CBZ" in issues[0].message
 
 
 def test_parse_chapter_selection_supports_all_ranges_and_lists() -> None:

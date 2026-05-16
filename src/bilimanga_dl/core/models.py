@@ -25,6 +25,7 @@ class Chapter:
     title: str
     url: str
     series_title: str = ""
+    volume_title: str = ""
     image_urls: list[str] = field(default_factory=list)
 
 

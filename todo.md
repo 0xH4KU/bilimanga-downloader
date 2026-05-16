@@ -33,6 +33,7 @@
 - [x] 加入 path traversal 防護，確保 sanitize 後的輸出路徑不逃出 output dir
 - [x] 失敗摘要要能區分 missing images、all failed、partial failed、conversion failed
 - [x] 補 downloader 測試覆蓋 complete/skip/partial/retry/corrupt-file/path-escape
+- [x] 支援章節級併發，避免 detail/volume 批量下載只串行處理章節
 
 ## 3. 瀏覽器與 HTTP runtime
 
@@ -50,6 +51,7 @@
 - [x] 支援章節選擇：`all`、`1`、`1-5`、`1,3,5`
 - [x] 支援章節 filter：`+keyword`、`-keyword`、undo、reset
 - [x] 支援 `--format pdf|cbz|both`、`--output`、`--no-optimize`、`--quiet`、`--debug`
+- [x] 支援 `--chapter-concurrency`，可按站點穩定性調整章節並行數
 - [x] 用 Rich table/panel 顯示 series metadata、chapter list、download progress、summary
 - [x] `doctor` 檢查 Python、依賴、Chrome/Playwright、output dir、bilimanga URL probe
 - [x] 補 CLI flow tests，避免互動流程和 non-interactive 流程分叉
@@ -57,6 +59,7 @@
 ## 5. 轉檔與清理
 
 - [x] 移植 `core/converters.py`：CBZ、PDF、both
+- [x] 支援 `--package chapter|volume|both`，按章節或按卷輸出 CBZ，保留章節打包作為預設
 - [x] 支援 WebP optimization，並保留 `--no-optimize`
 - [x] 大 PDF 使用 batch merge，預設依賴 `pypdf`
 - [x] 只有完整 chapter 才能轉檔；partial chapter 保留 raw images 和 state file

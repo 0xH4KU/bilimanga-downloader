@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self
@@ -20,6 +21,15 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class DownloadedChapter:
+    """One chapter output produced or skipped by a download run."""
+
+    title: str
+    volume_title: str
+    chapter_dir: Path
+
+
+@dataclass(frozen=True)
 class DownloadSummary:
     """Aggregate result for a download command."""
 
@@ -33,6 +43,15 @@ class DownloadSummary:
     failed: int = 0
     total_bytes: int = 0
     issues: tuple[DownloadIssue, ...] = ()
+    chapters: tuple[DownloadedChapter, ...] = ()
+
+
+@dataclass(frozen=True)
+class _ChapterOutcome:
+    result: DownloadResult | None = None
+    downloaded_chapter: DownloadedChapter | None = None
+    issue: DownloadIssue | None = None
+    series_title: str = ""
 
 
 class TextBytesClient(Protocol):
@@ -84,6 +103,7 @@ class BilimangaClient:
         self._http = http_client or BilimangaHttpClient()
         self._browser = PlaywrightBrowser(headless=headless) if reader is None else None
         self._reader = reader
+        self._reader_lock = asyncio.Lock()
         self._parser = parser or BilimangaParser()
         self.output_dir = Path(output_dir)
         self._downloader = downloader or ImageDownloader(self, output_dir=self.output_dir)
@@ -184,6 +204,7 @@ class BilimangaClient:
         image_limit: int | None = None,
         chapters_selection: str = "all",
         chapter_filters: list[str] | None = None,
+        chapter_concurrency: int = 1,
     ) -> DownloadSummary:
         """Download a series, volume, or chapter URL."""
         parsed = self._parser.parse_url(url)
@@ -204,40 +225,37 @@ class BilimangaClient:
             chapters = apply_chapter_filters(chapters, chapter_filters)
         chapters = parse_chapter_selection(chapters_selection, chapters)
 
+        resolved_series_title = series_title
+        if not resolved_series_title:
+            for chapter_stub in chapters:
+                if chapter_stub.series_title:
+                    resolved_series_title = chapter_stub.series_title
+                    break
+
+        semaphore = asyncio.Semaphore(max(1, chapter_concurrency))
+
+        async def download_one(chapter_stub: Chapter) -> _ChapterOutcome:
+            async with semaphore:
+                return await self._download_chapter_stub(
+                    chapter_stub,
+                    series_title=resolved_series_title,
+                    image_limit=image_limit,
+                )
+
+        raw_outcomes = await asyncio.gather(*[download_one(chapter_stub) for chapter_stub in chapters])
+
         results: list[DownloadResult] = []
         issues: list[DownloadIssue] = []
-        resolved_series_title = series_title
-        for chapter_stub in chapters:
-            try:
-                chapter = await self.load_chapter(chapter_stub.url)
-                if not resolved_series_title:
-                    resolved_series_title = chapter.series_title or self._infer_series_title(chapter)
-                image_urls = chapter.image_urls[:image_limit] if image_limit is not None else chapter.image_urls
-                if not image_urls:
-                    issues.append(
-                        DownloadIssue(
-                            chapter_title=chapter.title,
-                            kind="missing_images",
-                            message="no images found on reader page",
-                        )
-                    )
-                    continue
-                result = await self._downloader.download_images(
-                    resolved_series_title,
-                    chapter.title,
-                    image_urls,
-                    referer=chapter.url,
-                )
-                results.append(result)
-            except Exception as exc:
-                issues.append(
-                    DownloadIssue(
-                        chapter_title=chapter_stub.title or chapter_stub.url,
-                        kind="chapter_failed",
-                        message=str(exc) or exc.__class__.__name__,
-                    )
-                )
-                continue
+        downloaded_chapters: list[DownloadedChapter] = []
+        for outcome in raw_outcomes:
+            if outcome.result is not None:
+                results.append(outcome.result)
+            if outcome.downloaded_chapter is not None:
+                downloaded_chapters.append(outcome.downloaded_chapter)
+            if outcome.issue is not None:
+                issues.append(outcome.issue)
+        if not resolved_series_title:
+            resolved_series_title = next((outcome.series_title for outcome in raw_outcomes if outcome.series_title), "")
 
         return DownloadSummary(
             series_title=resolved_series_title or "bilimanga",
@@ -250,7 +268,55 @@ class BilimangaClient:
             failed=sum(result.failed for result in results) + len(issues),
             total_bytes=sum(_chapter_bytes(result.chapter_dir) for result in results),
             issues=(*_issues_from_results(results), *issues),
+            chapters=tuple(downloaded_chapters),
         )
+
+    async def _download_chapter_stub(
+        self,
+        chapter_stub: Chapter,
+        *,
+        series_title: str,
+        image_limit: int | None,
+    ) -> _ChapterOutcome:
+        try:
+            chapter = await self.load_chapter(chapter_stub.url)
+            resolved_series_title = series_title or chapter.series_title or self._infer_series_title(chapter)
+            image_urls = chapter.image_urls[:image_limit] if image_limit is not None else chapter.image_urls
+            if not image_urls:
+                return _ChapterOutcome(
+                    issue=DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="missing_images",
+                        message="no images found on reader page",
+                    ),
+                    series_title=resolved_series_title,
+                )
+            result = await self._downloader.download_images(
+                resolved_series_title,
+                chapter.title,
+                image_urls,
+                referer=chapter.url,
+            )
+            downloaded_chapter = DownloadedChapter(
+                title=chapter.title,
+                volume_title=chapter_stub.volume_title
+                or chapter.volume_title
+                or _volume_title_from_chapter(chapter.title),
+                chapter_dir=result.chapter_dir,
+            )
+            return _ChapterOutcome(
+                result=result,
+                downloaded_chapter=downloaded_chapter,
+                series_title=resolved_series_title,
+            )
+        except Exception as exc:
+            return _ChapterOutcome(
+                issue=DownloadIssue(
+                    chapter_title=chapter_stub.title or chapter_stub.url,
+                    kind="chapter_failed",
+                    message=str(exc) or exc.__class__.__name__,
+                ),
+            )
 
     async def _chapters_from_series(self, url: str) -> tuple[str, list[Chapter]]:
         series = await self.load_series(url)
@@ -261,8 +327,10 @@ class BilimangaClient:
 
     async def _ensure_reader(self) -> ReaderRenderer:
         if self._reader is None:
-            assert self._browser is not None
-            self._reader = await self._browser.start()
+            async with self._reader_lock:
+                if self._reader is None:
+                    assert self._browser is not None
+                    self._reader = await self._browser.start()
         return self._reader
 
     @staticmethod
@@ -276,6 +344,12 @@ def _chapter_bytes(chapter_dir: Path) -> int:
     if not chapter_dir.exists():
         return 0
     return sum(path.stat().st_size for path in chapter_dir.iterdir() if path.is_file())
+
+
+def _volume_title_from_chapter(chapter_title: str) -> str:
+    if " " in chapter_title:
+        return chapter_title.split(" ", 1)[0]
+    return "Volume"
 
 
 def _issues_from_results(results: list[DownloadResult]) -> tuple[DownloadIssue, ...]:

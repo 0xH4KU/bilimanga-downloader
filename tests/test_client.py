@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,20 @@ class FakeReaderRenderer:
         return b"browser-image"
 
 
+class SlowBrowser:
+    def __init__(self, reader: FakeReaderRenderer) -> None:
+        self.reader = reader
+        self.starts = 0
+
+    async def start(self) -> FakeReaderRenderer:
+        self.starts += 1
+        await asyncio.sleep(0.01)
+        return self.reader
+
+    async def aclose(self) -> None:
+        return None
+
+
 class TimeoutReaderRenderer(FakeReaderRenderer):
     async def render(self, url: str) -> str:
         raise TimeoutError("reader took too long")
@@ -172,6 +187,29 @@ class MixedResultDownloader(FakeDownloader):
         )
 
 
+class ConcurrencyTrackingDownloader(FakeDownloader):
+    def __init__(self, output_dir: Path) -> None:
+        super().__init__(output_dir)
+        self.active = 0
+        self.max_active = 0
+
+    async def download_images(
+        self,
+        series_title: str,
+        chapter_title: str,
+        image_urls: list[str],
+        *,
+        referer: str | None = None,
+    ) -> DownloadResult:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
+            await asyncio.sleep(0.01)
+            return await super().download_images(series_title, chapter_title, image_urls, referer=referer)
+        finally:
+            self.active -= 1
+
+
 async def test_download_url_expands_series_and_respects_limits(tmp_path: Path) -> None:
     http = FakeHttpClient(
         {
@@ -214,6 +252,7 @@ async def test_download_url_expands_series_and_respects_limits(tmp_path: Path) -
     assert summary.total_chapters == 1
     assert summary.total_images == 1
     assert summary.downloaded == 1
+    assert summary.chapters[0].volume_title == "新世紀福音戰士 完全版 1"
 
 
 async def test_download_url_accepts_direct_chapter_url(tmp_path: Path) -> None:
@@ -236,6 +275,28 @@ async def test_download_url_accepts_direct_chapter_url(tmp_path: Path) -> None:
     )
     assert summary.total_chapters == 1
     assert summary.total_images == 2
+    assert summary.series_title == "新世紀福音戰士 完全版"
+
+
+async def test_download_url_keeps_volume_title_for_volume_url(tmp_path: Path) -> None:
+    downloader = FakeDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+                "https://www.bilimanga.net/read/285/24328.html": READER_HTML_2,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url("https://www.bilimanga.net/detail/285/vol_24326.html", chapter_limit=1)
+
+    assert summary.series_title == "新世紀福音戰士 完全版 1"
+    assert summary.chapters[0].volume_title == "新世紀福音戰士 完全版 1"
 
 
 async def test_download_url_summary_tracks_failed_partial_bytes_and_issues(tmp_path: Path) -> None:
@@ -345,6 +406,28 @@ async def test_download_url_applies_chapter_selection_and_filters(tmp_path: Path
     assert downloader.calls[0][1] == "第１卷 STAGE.２ 再會⋯⋯"
 
 
+async def test_download_url_respects_chapter_concurrency(tmp_path: Path) -> None:
+    downloader = ConcurrencyTrackingDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+                "https://www.bilimanga.net/read/285/24328.html": READER_HTML_2,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url("https://www.bilimanga.net/detail/285.html", chapter_concurrency=2)
+
+    assert summary.total_chapters == 2
+    assert downloader.max_active == 2
+
+
 async def test_load_chapter_falls_back_to_reader_when_http_has_no_images() -> None:
     blocked_html = """
     <html><body>
@@ -430,6 +513,25 @@ async def test_client_fetch_page_falls_back_to_reader_after_forbidden_http_statu
 
     assert html == READER_HTML_1
     assert reader.urls == ["https://www.bilimanga.net/read/285/24327.html"]
+
+
+async def test_client_starts_reader_once_under_concurrent_fallback(tmp_path: Path) -> None:
+    reader = FakeReaderRenderer({"https://www.bilimanga.net/read/285/24327.html": READER_HTML_1})
+    browser = SlowBrowser(reader)
+    client = BilimangaClient(
+        http_client=ForbiddenPageHttpClient({}),
+        downloader=FakeDownloader(tmp_path),
+        output_dir=tmp_path,
+    )
+    client._browser = browser  # type: ignore[assignment]
+
+    pages = await asyncio.gather(
+        client.fetch_page("https://www.bilimanga.net/read/285/24327.html"),
+        client.fetch_page("https://www.bilimanga.net/read/285/24327.html"),
+    )
+
+    assert pages == [READER_HTML_1, READER_HTML_1]
+    assert browser.starts == 1
 
 
 async def test_client_get_bytes_falls_back_only_for_forbidden_http_status() -> None:

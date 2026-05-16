@@ -82,6 +82,7 @@ def test_parse_volume_extracts_chapters() -> None:
     assert volume.title == "新世紀福音戰士 完全版 1"
     assert [chapter.chapter_id for chapter in volume.chapters] == [24327, 24328]
     assert volume.chapters[0].title == "STAGE.１ 使徒、來襲"
+    assert volume.chapters[0].volume_title == "新世紀福音戰士 完全版 1"
     assert volume.chapters[0].url == "https://www.bilimanga.net/read/285/24327.html"
 
 

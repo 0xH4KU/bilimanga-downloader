@@ -10,8 +10,8 @@ Focused `bilimanga.net` parser and downloader, grown from the same architecture 
 
 - Supports bilimanga detail, volume, and reader URLs.
 - Uses mobile-shaped HTTP first, with Playwright rendering fallback when reader pages or images are blocked.
-- Resumable image downloads with retries, atomic writes, corrupt-file recovery, partial state files, and path traversal protection.
-- Outputs raw images, PDF, CBZ, or both. Partial chapters are never converted.
+- Resumable chapter and image downloads with bounded concurrency, retries, atomic writes, corrupt-file recovery, partial state files, and path traversal protection.
+- Outputs raw images, per-chapter PDF/CBZ, or per-volume CBZ. Partial chapters are never converted.
 - Includes settings, download history, summary reports, cleanup helpers, and best-effort desktop notifications.
 - Provides `doctor`, `list`, `clean`, `history`, and `settings` commands for everyday maintenance.
 
@@ -69,6 +69,23 @@ bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --chapters 1-5
 bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --chapters 1,3,5 --format cbz --no-optimize
 ```
 
+Package completed chapters by chapter, by volume, or both:
+
+```bash
+bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --format cbz --package chapter
+bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --format cbz --package volume
+bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --format both --package both
+```
+
+Volume packaging creates CBZ archives only. Use `--format cbz` for volume-only packaging, or `--format both --package both` when you also want per-chapter PDFs.
+
+Tune chapter-level parallelism:
+
+```bash
+bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --chapter-concurrency 4
+bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --chapter-concurrency 1
+```
+
 Filter chapters before selection:
 
 ```bash
@@ -114,11 +131,13 @@ Supported concurrency profiles:
 - `ci`
 - `custom`
 
+The default desktop profile downloads up to 2 chapters at once and up to 8 images per chapter. `--chapter-concurrency` overrides the chapter count for one command.
+
 ## How It Works
 
 `BilimangaHttpClient` fetches pages and images with headers accepted by the mobile reader. If a reader page returns no image tags, or an image request is blocked with a recoverable status, `PlaywrightBrowser` renders the page or loads the image response through Chromium.
 
-The downloader writes images atomically, validates existing files by magic bytes before resuming, and writes `chapter.state.json` for partial or failed chapters. Only directories with `.complete` and no partial state file are eligible for PDF/CBZ conversion and cleanup.
+The downloader processes chapters with a bounded semaphore, then downloads images inside each chapter with a second semaphore. It writes images atomically, validates existing files by magic bytes before resuming, and writes `chapter.state.json` for partial or failed chapters. Only directories with `.complete` and no partial state file are eligible for PDF/CBZ conversion and cleanup.
 
 ## Development
 

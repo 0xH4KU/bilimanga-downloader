@@ -101,7 +101,7 @@ class BilimangaParser:
             volume_id=parsed_url.volume_id,
             title=title,
             url=url,
-            chapters=self._parse_chapter_links(soup, parsed_url.manga_id),
+            chapters=self._parse_chapter_links(soup, parsed_url.manga_id, volume_title=title),
         )
         return volume
 
@@ -153,7 +153,7 @@ class BilimangaParser:
             volumes.append(Volume(manga_id=manga_id, volume_id=parsed.volume_id, title=title, url=absolute))
         return _dedupe_volumes(volumes)
 
-    def _parse_chapter_links(self, soup: BeautifulSoup, manga_id: int) -> list[Chapter]:
+    def _parse_chapter_links(self, soup: BeautifulSoup, manga_id: int, *, volume_title: str = "") -> list[Chapter]:
         chapters: list[Chapter] = []
         for link in soup.select("li.chapter-li a[href*='/read/']"):
             href = _attr_one(link, "href")
@@ -166,7 +166,15 @@ class BilimangaParser:
             title = _text_one(link, ".chapter-title") or _clean_text(link.get_text(" "))
             if not title:
                 title = f"Chapter {parsed.chapter_id}"
-            chapters.append(Chapter(manga_id=manga_id, chapter_id=parsed.chapter_id, title=title, url=absolute))
+            chapters.append(
+                Chapter(
+                    manga_id=manga_id,
+                    chapter_id=parsed.chapter_id,
+                    title=title,
+                    url=absolute,
+                    volume_title=volume_title,
+                )
+            )
         return _dedupe_chapters(chapters)
 
 

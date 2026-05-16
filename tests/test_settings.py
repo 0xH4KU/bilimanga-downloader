@@ -19,6 +19,7 @@ def test_settings_defaults_target_bilimanga_config_dir() -> None:
     assert settings.output_dir == str(Path.home() / "Downloads" / "bilimanga-dl")
     assert settings.default_format == "pdf"
     assert settings.concurrency_profile == "desktop"
+    assert settings.concurrent_chapters == 2
     assert settings.concurrent_images == 8
     assert settings.max_retries == 3
 
@@ -29,6 +30,7 @@ def test_settings_repository_round_trip(tmp_path: Path) -> None:
         output_dir="/tmp/bilimanga",
         default_format="both",
         concurrency_profile="custom",
+        concurrent_chapters=3,
         concurrent_images=4,
         max_retries=5,
         download_delay=False,
@@ -51,6 +53,7 @@ def test_settings_repository_normalizes_invalid_values(tmp_path: Path) -> None:
                 "version": 1,
                 "default_format": "zip",
                 "concurrency_profile": "broken",
+                "concurrent_chapters": 0,
                 "concurrent_images": 0,
                 "max_retries": 99,
                 "download_delay": "yes",
@@ -64,6 +67,7 @@ def test_settings_repository_normalizes_invalid_values(tmp_path: Path) -> None:
 
     assert settings.default_format == "pdf"
     assert settings.concurrency_profile == "custom"
+    assert settings.concurrent_chapters == 1
     assert settings.concurrent_images == 1
     assert settings.max_retries == 10
     assert settings.download_delay is True
@@ -81,14 +85,17 @@ def test_settings_repository_returns_defaults_for_corrupt_json(tmp_path: Path) -
 
 def test_resolve_download_tuning_uses_profiles() -> None:
     assert SettingsRepository.resolve_download_tuning(Settings(concurrency_profile="desktop")) == DownloadTuning(
+        concurrent_chapters=2,
         concurrent_images=8,
         download_delay=True,
     )
     assert SettingsRepository.resolve_download_tuning(Settings(concurrency_profile="low_resource")) == DownloadTuning(
+        concurrent_chapters=1,
         concurrent_images=2,
         download_delay=True,
     )
     assert SettingsRepository.resolve_download_tuning(Settings(concurrency_profile="ci")) == DownloadTuning(
+        concurrent_chapters=1,
         concurrent_images=4,
         download_delay=False,
     )
