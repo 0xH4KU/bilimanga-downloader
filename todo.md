@@ -25,14 +25,14 @@
 
 ## 2. 下載可靠性
 
-- [ ] 移植 `core/fileio.py` 的 atomic write helper
-- [ ] 升級 downloader：並發圖片下載、retry/backoff、bytes 統計、progress callback
-- [ ] 加入圖片副檔名魔數判斷，避免只依 URL suffix 推測
-- [ ] Resume 時驗證既有圖片有效性，壞檔/空檔自動刪除重抓
-- [ ] 加入 partial semantics：部分失敗不寫 `.complete`，寫入 `chapter.state.json`
-- [ ] 加入 path traversal 防護，確保 sanitize 後的輸出路徑不逃出 output dir
+- [x] 移植 `core/fileio.py` 的 atomic write helper
+- [x] 升級 downloader：並發圖片下載、retry/backoff、bytes 統計、progress callback
+- [x] 加入圖片副檔名魔數判斷，避免只依 URL suffix 推測
+- [x] Resume 時驗證既有圖片有效性，壞檔/空檔自動刪除重抓
+- [x] 加入 partial semantics：部分失敗不寫 `.complete`，寫入 `chapter.state.json`
+- [x] 加入 path traversal 防護，確保 sanitize 後的輸出路徑不逃出 output dir
 - [ ] 失敗摘要要能區分 missing images、all failed、partial failed、conversion failed
-- [ ] 補 downloader 測試覆蓋 complete/skip/partial/retry/corrupt-file/path-escape
+- [x] 補 downloader 測試覆蓋 complete/skip/partial/retry/corrupt-file/path-escape
 
 ## 3. 瀏覽器與 HTTP runtime
 
