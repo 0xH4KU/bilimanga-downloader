@@ -44,6 +44,27 @@ def to_cbz(image_dir: Path, output_path: Path | None = None) -> Path:
     return output
 
 
+def to_collection_cbz(chapters: list[tuple[str, Path]], output_path: Path) -> Path:
+    """Create one CBZ from multiple complete chapter directories."""
+    if not chapters:
+        raise ConversionError("No chapters found for collection archive")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wrote_image = False
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_STORED) as archive:
+        for label, chapter_dir in chapters:
+            _ensure_convertible(chapter_dir)
+            images = collect_images(chapter_dir)
+            if not images:
+                raise ConversionError(f"No images found in {chapter_dir}")
+            safe_label = _safe_archive_segment(label)
+            for image in images:
+                archive.write(image, f"{safe_label}/{image.name}")
+                wrote_image = True
+    if not wrote_image:
+        raise ConversionError(f"No images found for {output_path}")
+    return output_path
+
+
 def to_pdf(image_dir: Path, output_path: Path | None = None) -> Path:
     """Create a PDF from a complete chapter image directory."""
     _ensure_convertible(image_dir)
@@ -142,6 +163,11 @@ def _ensure_convertible(image_dir: Path) -> None:
         raise ConversionError(f"Refusing to convert partial chapter: {image_dir}")
     if not (image_dir / ".complete").exists():
         raise ConversionError(f"Refusing to convert incomplete chapter: {image_dir}")
+
+
+def _safe_archive_segment(value: str) -> str:
+    cleaned = value.replace("\\", " ").replace("/", " ")
+    return " ".join(cleaned.split()) or "chapter"
 
 
 def _build_pdf_batched(image_paths: list[Path], output: Path, dpi: float, *, batch_size: int) -> None:

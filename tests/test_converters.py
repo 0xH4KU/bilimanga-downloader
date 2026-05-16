@@ -13,6 +13,7 @@ from bilimanga_dl.core.converters import (
     convert,
     optimize_images,
     to_cbz,
+    to_collection_cbz,
     to_pdf,
 )
 from bilimanga_dl.core.errors import ConversionError
@@ -63,6 +64,33 @@ def test_to_cbz_requires_complete_chapter_and_creates_archive(tmp_path: Path) ->
     assert result == tmp_path / "Chapter.cbz"
     with zipfile.ZipFile(result) as archive:
         assert archive.namelist() == ["001.png", "002.png"]
+
+
+def test_to_collection_cbz_groups_complete_chapters_under_ordered_dirs(tmp_path: Path) -> None:
+    chapter_1 = tmp_path / "第１卷 STAGE.１"
+    chapter_2 = tmp_path / "第１卷 STAGE.２"
+    chapter_1.mkdir()
+    chapter_2.mkdir()
+    _create_test_images(chapter_1, count=2)
+    _create_test_images(chapter_2, count=1)
+    (chapter_1 / ".complete").touch()
+    (chapter_2 / ".complete").touch()
+
+    result = to_collection_cbz(
+        [
+            ("001 第１卷 STAGE.１", chapter_1),
+            ("002 第１卷 STAGE.２", chapter_2),
+        ],
+        tmp_path / "第１卷.cbz",
+    )
+
+    assert result == tmp_path / "第１卷.cbz"
+    with zipfile.ZipFile(result) as archive:
+        assert archive.namelist() == [
+            "001 第１卷 STAGE.１/001.png",
+            "001 第１卷 STAGE.１/002.png",
+            "002 第１卷 STAGE.２/001.png",
+        ]
 
 
 def test_conversion_refuses_partial_chapter(tmp_path: Path) -> None:
