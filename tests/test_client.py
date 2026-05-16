@@ -260,6 +260,30 @@ async def test_download_url_summary_tracks_failed_partial_bytes_and_issues(tmp_p
     assert summary.issues[0].kind == "partial"
 
 
+async def test_download_url_records_missing_images_issue(tmp_path: Path) -> None:
+    no_images_html = READER_HTML_1.replace(
+        '<img class="imagecontent" data-src="https://i.motiezw.com/0/285/24327/524971.avif">',
+        "",
+    ).replace(
+        '<img class="imagecontent" data-src="https://i.motiezw.com/0/285/24327/524972.avif">',
+        "",
+    )
+    client = BilimangaClient(
+        http_client=FakeHttpClient({"https://www.bilimanga.net/read/285/24327.html": no_images_html}),
+        reader=FakeReaderRenderer({"https://www.bilimanga.net/read/285/24327.html": no_images_html}),
+        downloader=FakeDownloader(tmp_path),
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url("https://www.bilimanga.net/read/285/24327.html")
+
+    assert summary.total_chapters == 1
+    assert summary.failed == 1
+    assert summary.issues[0].chapter_title == "第１卷 STAGE.１ 使徒、來襲"
+    assert summary.issues[0].kind == "missing_images"
+    assert summary.issues[0].message == "no images found on reader page"
+
+
 async def test_download_url_applies_chapter_selection_and_filters(tmp_path: Path) -> None:
     downloader = FakeDownloader(tmp_path)
     client = BilimangaClient(

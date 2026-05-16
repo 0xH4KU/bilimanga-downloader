@@ -14,8 +14,9 @@ from rich.table import Table
 from bilimanga_dl.core.cleanup import apply_cleanup_plan, build_cleanup_plan, list_downloaded_series
 from bilimanga_dl.core.client import BilimangaClient, DownloadSummary
 from bilimanga_dl.core.converters import convert
+from bilimanga_dl.core.errors import ConversionError
 from bilimanga_dl.core.history import HistoryRepository
-from bilimanga_dl.core.reporting import build_download_report, format_bytes, format_download_counts
+from bilimanga_dl.core.reporting import DownloadIssue, build_download_report, format_bytes, format_download_counts
 from bilimanga_dl.core.runtime import detect_chrome_path
 from bilimanga_dl.core.selection import apply_chapter_filters as _apply_chapter_filters
 from bilimanga_dl.core.selection import parse_chapter_selection as _parse_chapter_selection
@@ -132,9 +133,15 @@ async def _download(args: argparse.Namespace) -> int:
             chapter_filters=args.filters,
         )
 
-    _convert_downloaded_chapters(summary, fmt=args.format or settings.default_format, optimize=not args.no_optimize)
+    conversion_issues = _convert_downloaded_chapters(
+        summary,
+        fmt=args.format or settings.default_format,
+        optimize=not args.no_optimize,
+    )
+    if conversion_issues:
+        summary = _summary_with_issues(summary, conversion_issues)
     _print_summary(summary)
-    return 0
+    return 1 if conversion_issues else 0
 
 
 async def _info(url: str) -> int:
@@ -276,11 +283,14 @@ def _print_summary(summary: DownloadSummary) -> None:
         f"failed {summary.failed}, chapters {summary.total_chapters}, output: {summary.output_dir}"
     )
     console.print(report.summary_text)
+    for line in report.preview_issue_lines():
+        console.print(line)
 
 
-def _convert_downloaded_chapters(summary: DownloadSummary, *, fmt: str, optimize: bool) -> None:
+def _convert_downloaded_chapters(summary: DownloadSummary, *, fmt: str, optimize: bool) -> tuple[DownloadIssue, ...]:
     if fmt not in {"pdf", "cbz", "both"}:
-        return
+        return ()
+    issues: list[DownloadIssue] = []
     for chapter_dir in _iter_complete_chapter_dirs(summary.output_dir):
         converted_pdf = chapter_dir.parent / f"{chapter_dir.name}.pdf"
         converted_cbz = chapter_dir.parent / f"{chapter_dir.name}.cbz"
@@ -290,7 +300,32 @@ def _convert_downloaded_chapters(summary: DownloadSummary, *, fmt: str, optimize
             continue
         if fmt == "both" and converted_pdf.exists() and converted_cbz.exists():
             continue
-        convert(chapter_dir, fmt, optimize=optimize)
+        try:
+            convert(chapter_dir, fmt, optimize=optimize)
+        except ConversionError as exc:
+            issues.append(
+                DownloadIssue(
+                    chapter_title=chapter_dir.name,
+                    kind="conversion_failed",
+                    message=f"conversion failed: {exc}",
+                )
+            )
+    return tuple(issues)
+
+
+def _summary_with_issues(summary: DownloadSummary, issues: tuple[DownloadIssue, ...]) -> DownloadSummary:
+    return DownloadSummary(
+        series_title=summary.series_title,
+        total_chapters=summary.total_chapters,
+        total_images=summary.total_images,
+        downloaded=summary.downloaded,
+        skipped=summary.skipped,
+        output_dir=summary.output_dir,
+        partial=summary.partial,
+        failed=summary.failed + len(issues),
+        total_bytes=summary.total_bytes,
+        issues=(*summary.issues, *issues),
+    )
 
 
 def _iter_complete_chapter_dirs(output_dir: Path) -> list[Path]:

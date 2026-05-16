@@ -205,12 +205,22 @@ class BilimangaClient:
         chapters = parse_chapter_selection(chapters_selection, chapters)
 
         results: list[DownloadResult] = []
+        issues: list[DownloadIssue] = []
         resolved_series_title = series_title
         for chapter_stub in chapters:
             chapter = await self.load_chapter(chapter_stub.url)
             if not resolved_series_title:
                 resolved_series_title = chapter.series_title or self._infer_series_title(chapter)
             image_urls = chapter.image_urls[:image_limit] if image_limit is not None else chapter.image_urls
+            if not image_urls:
+                issues.append(
+                    DownloadIssue(
+                        chapter_title=chapter.title,
+                        kind="missing_images",
+                        message="no images found on reader page",
+                    )
+                )
+                continue
             result = await self._downloader.download_images(
                 resolved_series_title,
                 chapter.title,
@@ -221,15 +231,15 @@ class BilimangaClient:
 
         return DownloadSummary(
             series_title=resolved_series_title or "bilimanga",
-            total_chapters=len(results),
+            total_chapters=len(chapters),
             total_images=sum(result.total for result in results),
             downloaded=sum(result.downloaded for result in results),
             skipped=sum(result.skipped for result in results),
             output_dir=self.output_dir,
             partial=sum(1 for result in results if result.status == "partial"),
-            failed=sum(result.failed for result in results),
+            failed=sum(result.failed for result in results) + len(issues),
             total_bytes=sum(_chapter_bytes(result.chapter_dir) for result in results),
-            issues=_issues_from_results(results),
+            issues=(*_issues_from_results(results), *issues),
         )
 
     async def _chapters_from_series(self, url: str) -> tuple[str, list[Chapter]]:

@@ -6,6 +6,7 @@ from typing import ClassVar
 
 from bilimanga_dl.core import cli
 from bilimanga_dl.core.client import DownloadSummary
+from bilimanga_dl.core.errors import ConversionError
 from bilimanga_dl.core.history import HistoryEntry
 from bilimanga_dl.core.models import ChapterInfo
 from bilimanga_dl.core.settings import Settings
@@ -125,6 +126,54 @@ def test_download_command_passes_legacy_limits_to_client(monkeypatch, tmp_path: 
     assert FakeClient.instances[0].headless is False
     assert FakeClient.instances[0].calls == [("https://www.bilimanga.net/read/285/24327.html", 1, 2)]
     assert "新世紀福音戰士 完全版" in capsys.readouterr().out
+
+
+def test_download_command_reports_conversion_failure(monkeypatch, tmp_path: Path, capsys) -> None:
+    class CompleteClient(FakeClient):
+        async def download_url(
+            self,
+            url: str,
+            *,
+            chapter_limit: int | None = None,
+            image_limit: int | None = None,
+            chapters_selection: str = "all",
+            chapter_filters: list[str] | None = None,
+        ) -> DownloadSummary:
+            del url, chapter_limit, image_limit, chapters_selection, chapter_filters
+            chapter_dir = self.output_dir / "Series" / "Chapter"
+            chapter_dir.mkdir(parents=True)
+            (chapter_dir / ".complete").write_text("", encoding="utf-8")
+            return DownloadSummary(
+                series_title="Series",
+                total_chapters=1,
+                total_images=1,
+                downloaded=1,
+                skipped=0,
+                output_dir=self.output_dir,
+            )
+
+    def fail_convert(chapter_dir: Path, fmt: str, *, optimize: bool) -> Path:
+        del chapter_dir, fmt, optimize
+        raise ConversionError("bad image")
+
+    monkeypatch.setattr(cli, "BilimangaClient", CompleteClient)
+    monkeypatch.setattr(cli, "convert", fail_convert)
+
+    result = cli.main(
+        [
+            "download",
+            "https://www.bilimanga.net/read/285/24327.html",
+            "--output",
+            str(tmp_path),
+            "--format",
+            "cbz",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert "conversion failed" in output
+    assert "Chapter: conversion failed: bad image" in output
 
 
 def test_parse_chapter_selection_supports_all_ranges_and_lists() -> None:
