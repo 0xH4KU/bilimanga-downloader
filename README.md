@@ -11,6 +11,7 @@ Focused `bilimanga.net` parser and downloader, grown from the same architecture 
 - Supports bilimanga detail, volume, and reader URLs.
 - Uses mobile-shaped HTTP first, with Playwright rendering fallback when reader pages or images are blocked.
 - Resumable chapter and image downloads with bounded concurrency, retries, atomic writes, corrupt-file recovery, partial state files, and path traversal protection.
+- Verifies local downloads against the remote chapter list, with optional deep image-count checks and targeted repair downloads.
 - Outputs raw images, per-chapter PDF/CBZ, or per-volume CBZ. Partial chapters are never converted.
 - Includes settings, download history, summary reports, cleanup helpers, and best-effort desktop notifications.
 - Provides `doctor`, `list`, `clean`, `history`, and `settings` commands for everyday maintenance.
@@ -85,6 +86,16 @@ Tune chapter-level parallelism:
 bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --chapter-concurrency 4
 bilimanga-dl download 'https://www.bilimanga.net/detail/285.html' --chapter-concurrency 1
 ```
+
+Verify local downloads and repair gaps:
+
+```bash
+bilimanga-dl verify 'https://www.bilimanga.net/detail/285.html' --output downloads
+bilimanga-dl verify 'https://www.bilimanga.net/detail/285.html' --output downloads --deep
+bilimanga-dl verify 'https://www.bilimanga.net/detail/285.html' --output downloads --deep --repair --chapter-concurrency 4
+```
+
+`verify` without `--deep` is the fast path: it fetches the detail/volume chapter list, matches it against local directories, and uses `chapter.meta.json` when available. `--deep` also loads reader pages to refresh expected image counts, which is slower but can catch chapters marked complete with missing or extra images. `--repair` redownloads only chapters reported missing or incomplete.
 
 Filter chapters before selection:
 

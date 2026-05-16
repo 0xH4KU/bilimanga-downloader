@@ -21,6 +21,7 @@ from bilimanga_dl.core.runtime import detect_chrome_path
 from bilimanga_dl.core.selection import apply_chapter_filters as _apply_chapter_filters
 from bilimanga_dl.core.selection import parse_chapter_selection as _parse_chapter_selection
 from bilimanga_dl.core.settings import SettingsRepository
+from bilimanga_dl.core.verify import VerifyReport, VerifyStatus
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
     from bilimanga_dl.core.models import SeriesInfo
 
 console = Console()
-_COMMANDS = {"download", "info", "list", "clean", "history", "doctor", "settings"}
+_COMMANDS = {"download", "verify", "info", "list", "clean", "history", "doctor", "settings"}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +67,28 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--limit", type=_positive_int, default=None, help=argparse.SUPPRESS)
     download.add_argument("--image-limit", type=_positive_int, default=None, help=argparse.SUPPRESS)
     download.add_argument("--headed", action="store_true", help="Show Chrome while rendering reader pages")
+
+    verify = sub.add_parser("verify", help="Verify local downloads against the remote chapter list")
+    verify.add_argument("url", help="bilimanga detail, volume, or reader URL")
+    verify.add_argument("-c", "--chapters", default="all", help="Chapter selection: all, 1, 1-5, 1,3,5")
+    verify.add_argument(
+        "--filter",
+        dest="filters",
+        action="append",
+        default=[],
+        help="Chapter filter: +keyword/-keyword",
+    )
+    verify.add_argument("-o", "--output", default=None, help="Output directory")
+    verify.add_argument("--deep", action="store_true", help="Load reader pages and compare expected image counts")
+    verify.add_argument("--repair", action="store_true", help="Redownload missing or incomplete chapters")
+    verify.add_argument(
+        "--chapter-concurrency",
+        type=_positive_int,
+        default=None,
+        help="Number of repair chapters to download in parallel",
+    )
+    verify.add_argument("--limit", type=_positive_int, default=None, help=argparse.SUPPRESS)
+    verify.add_argument("--headed", action="store_true", help="Show Chrome while rendering reader pages")
 
     info = sub.add_parser("info", help="Show series metadata")
     info.add_argument("url", help="bilimanga URL or manga id")
@@ -110,6 +133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "download":
         return _run_async(_download(args))
+    if args.command == "verify":
+        return _run_async(_verify(args))
     if args.command == "info":
         return _run_async(_info(args.url))
     if args.command == "list":
@@ -154,6 +179,32 @@ async def _download(args: argparse.Namespace) -> int:
         summary = _summary_with_issues(summary, conversion_issues)
     _print_summary(summary)
     return 1 if conversion_issues else 0
+
+
+async def _verify(args: argparse.Namespace) -> int:
+    settings = SettingsRepository().load()
+    tuning = SettingsRepository.resolve_download_tuning(settings)
+    output = Path(args.output or settings.output_dir)
+    async with BilimangaClient(output_dir=output, headless=not args.headed) as client:
+        report = await client.verify_url(
+            args.url,
+            chapter_limit=args.limit,
+            chapters_selection=args.chapters,
+            chapter_filters=args.filters,
+            refresh_image_counts=args.deep,
+        )
+        _print_verify_report(report)
+        if not args.repair:
+            return 0 if report.ok else 1
+        if not report.repair_chapters:
+            console.print("[green]Nothing to repair.[/green]")
+            return 0
+        summary = await client.repair_report(
+            report,
+            chapter_concurrency=args.chapter_concurrency or tuning.concurrent_chapters,
+        )
+    _print_repair_summary(summary)
+    return 0 if summary.failed == 0 else 1
 
 
 async def _info(url: str) -> int:
@@ -297,6 +348,37 @@ def _print_summary(summary: DownloadSummary) -> None:
     )
     console.print(report.summary_text)
     for line in report.preview_issue_lines():
+        console.print(line)
+
+
+def _print_verify_report(report: VerifyReport) -> None:
+    console.print(f"[bold green]{report.series_title}[/bold green]")
+    console.print(
+        f"Verified {report.completed_count}/{report.total_expected} chapter(s), "
+        f"missing {report.missing_count}, incomplete {report.incomplete_count}, "
+        f"extra local {len(report.extra_local_dirs)}, output: {report.output_dir}"
+    )
+    for item in report.items:
+        if item.status == VerifyStatus.COMPLETE:
+            continue
+        detail = item.message
+        if item.expected_image_count is not None:
+            detail = (
+                f"{detail}; " if detail else ""
+            ) + f"images {item.local_image_count}/{item.expected_image_count}"
+        console.print(f"[yellow]{item.status.value}[/yellow] {item.chapter.title}: {detail}")
+    for path in report.extra_local_dirs[:10]:
+        console.print(f"[dim]extra local dir: {path}[/dim]")
+    if len(report.extra_local_dirs) > 10:
+        console.print(f"[dim]... {len(report.extra_local_dirs) - 10} more extra local dir(s)[/dim]")
+
+
+def _print_repair_summary(summary: DownloadSummary) -> None:
+    console.print(
+        f"[green]Repaired {summary.total_chapters} chapter(s).[/green] "
+        f"Downloaded {summary.downloaded} image(s), skipped {summary.skipped}, failed {summary.failed}."
+    )
+    for line in build_download_report(summary).preview_issue_lines():
         console.print(line)
 
 

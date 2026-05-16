@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from bilimanga_dl.core.client import BilimangaClient
 from bilimanga_dl.core.downloader import DownloadResult
 from bilimanga_dl.core.errors import BrowserTimeoutError, HttpStatusError
+from bilimanga_dl.core.verify import VerifyStatus
 
 DETAIL_HTML = """
 <html><body>
@@ -210,6 +212,34 @@ class ConcurrencyTrackingDownloader(FakeDownloader):
             self.active -= 1
 
 
+class CompleteMarkerCheckingDownloader(FakeDownloader):
+    async def download_images(
+        self,
+        series_title: str,
+        chapter_title: str,
+        image_urls: list[str],
+        *,
+        referer: str | None = None,
+    ) -> DownloadResult:
+        assert not (self.output_dir / series_title / chapter_title / ".complete").exists()
+        return await super().download_images(series_title, chapter_title, image_urls, referer=referer)
+
+
+class CleanSlateCheckingDownloader(FakeDownloader):
+    async def download_images(
+        self,
+        series_title: str,
+        chapter_title: str,
+        image_urls: list[str],
+        *,
+        referer: str | None = None,
+    ) -> DownloadResult:
+        chapter_dir = self.output_dir / series_title / chapter_title
+        assert not (chapter_dir / ".complete").exists()
+        assert not list(chapter_dir.glob("*.jpg"))
+        return await super().download_images(series_title, chapter_title, image_urls, referer=referer)
+
+
 async def test_download_url_expands_series_and_respects_limits(tmp_path: Path) -> None:
     http = FakeHttpClient(
         {
@@ -253,6 +283,30 @@ async def test_download_url_expands_series_and_respects_limits(tmp_path: Path) -
     assert summary.total_images == 1
     assert summary.downloaded == 1
     assert summary.chapters[0].volume_title == "新世紀福音戰士 完全版 1"
+
+
+async def test_download_url_writes_chapter_metadata(tmp_path: Path) -> None:
+    downloader = FakeDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+
+    summary = await client.download_url("https://www.bilimanga.net/detail/285.html", chapter_limit=1)
+
+    metadata = json.loads((summary.chapters[0].chapter_dir / "chapter.meta.json").read_text(encoding="utf-8"))
+    assert metadata["series_title"] == "新世紀福音戰士 完全版"
+    assert metadata["volume_title"] == "新世紀福音戰士 完全版 1"
+    assert metadata["chapter_id"] == 24327
+    assert metadata["expected_image_count"] == 2
 
 
 async def test_download_url_accepts_direct_chapter_url(tmp_path: Path) -> None:
@@ -426,6 +480,158 @@ async def test_download_url_respects_chapter_concurrency(tmp_path: Path) -> None
 
     assert summary.total_chapters == 2
     assert downloader.max_active == 2
+
+
+async def test_verify_url_reports_missing_chapters_with_legacy_names(tmp_path: Path) -> None:
+    series_dir = tmp_path / "新世紀福音戰士 完全版"
+    chapter_dir = series_dir / "第１卷 STAGE.１ 使徒、來襲"
+    chapter_dir.mkdir(parents=True)
+    (chapter_dir / ".complete").touch()
+    (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+    (chapter_dir / "002.jpg").write_bytes(b"\xff\xd8")
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=FakeDownloader(tmp_path),
+        output_dir=tmp_path,
+    )
+
+    report = await client.verify_url("https://www.bilimanga.net/detail/285.html")
+
+    assert report.total_expected == 2
+    assert report.completed_count == 1
+    assert [item.chapter.title for item in report.items if item.status == VerifyStatus.MISSING] == [
+        "STAGE.２ 再會⋯⋯"
+    ]
+
+
+async def test_verify_url_can_refresh_expected_image_counts(tmp_path: Path) -> None:
+    series_dir = tmp_path / "新世紀福音戰士 完全版"
+    chapter_dir = series_dir / "第１卷 STAGE.１ 使徒、來襲"
+    chapter_dir.mkdir(parents=True)
+    (chapter_dir / ".complete").touch()
+    (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=FakeDownloader(tmp_path),
+        output_dir=tmp_path,
+    )
+
+    report = await client.verify_url(
+        "https://www.bilimanga.net/detail/285.html",
+        chapter_limit=1,
+        refresh_image_counts=True,
+    )
+
+    assert report.items[0].status == VerifyStatus.IMAGE_MISMATCH
+    assert report.items[0].expected_image_count == 2
+    assert report.items[0].local_image_count == 1
+
+
+async def test_verify_url_accepts_direct_chapter_url_by_resolving_reader_title(tmp_path: Path) -> None:
+    series_dir = tmp_path / "新世紀福音戰士 完全版"
+    chapter_dir = series_dir / "第１卷 STAGE.１ 使徒、來襲"
+    chapter_dir.mkdir(parents=True)
+    (chapter_dir / ".complete").touch()
+    (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+    (chapter_dir / "002.jpg").write_bytes(b"\xff\xd8")
+    client = BilimangaClient(
+        http_client=FakeHttpClient({"https://www.bilimanga.net/read/285/24327.html": READER_HTML_1}),
+        reader=FakeReaderRenderer({}),
+        downloader=FakeDownloader(tmp_path),
+        output_dir=tmp_path,
+    )
+
+    report = await client.verify_url("https://www.bilimanga.net/read/285/24327.html")
+
+    assert report.series_title == "新世紀福音戰士 完全版"
+    assert report.total_expected == 1
+    assert report.completed_count == 1
+
+
+async def test_repair_report_redownloads_only_reported_chapters_and_clears_complete_marker(tmp_path: Path) -> None:
+    series_dir = tmp_path / "新世紀福音戰士 完全版"
+    chapter_dir = series_dir / "第１卷 STAGE.１ 使徒、來襲"
+    chapter_dir.mkdir(parents=True)
+    (chapter_dir / ".complete").touch()
+    (chapter_dir / "001.jpg").write_bytes(b"\xff\xd8")
+    downloader = CompleteMarkerCheckingDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+    report = await client.verify_url(
+        "https://www.bilimanga.net/detail/285.html",
+        chapter_limit=1,
+        refresh_image_counts=True,
+    )
+
+    summary = await client.repair_report(report, chapter_concurrency=2)
+
+    assert downloader.calls == [
+        (
+            "新世紀福音戰士 完全版",
+            "第１卷 STAGE.１ 使徒、來襲",
+            [
+                "https://i.motiezw.com/0/285/24327/524971.avif",
+                "https://i.motiezw.com/0/285/24327/524972.avif",
+            ],
+            "https://www.bilimanga.net/read/285/24327.html",
+        )
+    ]
+    assert summary.total_chapters == 1
+    assert summary.series_title == "新世紀福音戰士 完全版"
+
+
+async def test_repair_report_clears_mismatched_images_before_redownload(tmp_path: Path) -> None:
+    series_dir = tmp_path / "新世紀福音戰士 完全版"
+    chapter_dir = series_dir / "第１卷 STAGE.１ 使徒、來襲"
+    chapter_dir.mkdir(parents=True)
+    (chapter_dir / ".complete").touch()
+    for index in range(1, 4):
+        (chapter_dir / f"{index:03d}.jpg").write_bytes(b"\xff\xd8")
+    downloader = CleanSlateCheckingDownloader(tmp_path)
+    client = BilimangaClient(
+        http_client=FakeHttpClient(
+            {
+                "https://www.bilimanga.net/detail/285.html": DETAIL_HTML,
+                "https://www.bilimanga.net/detail/285/vol_24326.html": VOLUME_HTML,
+                "https://www.bilimanga.net/read/285/24327.html": READER_HTML_1,
+            }
+        ),
+        reader=FakeReaderRenderer({}),
+        downloader=downloader,
+        output_dir=tmp_path,
+    )
+    report = await client.verify_url(
+        "https://www.bilimanga.net/detail/285.html",
+        chapter_limit=1,
+        refresh_image_counts=True,
+    )
+
+    await client.repair_report(report, chapter_concurrency=1)
+
+    assert downloader.calls[0][1] == "第１卷 STAGE.１ 使徒、來襲"
 
 
 async def test_load_chapter_falls_back_to_reader_when_http_has_no_images() -> None:

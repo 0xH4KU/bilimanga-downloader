@@ -8,8 +8,9 @@ from bilimanga_dl.core import cli
 from bilimanga_dl.core.client import DownloadedChapter, DownloadSummary
 from bilimanga_dl.core.errors import ConversionError
 from bilimanga_dl.core.history import HistoryEntry
-from bilimanga_dl.core.models import ChapterInfo
+from bilimanga_dl.core.models import Chapter, ChapterInfo
 from bilimanga_dl.core.settings import Settings
+from bilimanga_dl.core.verify import VerifyItem, VerifyReport, VerifyStatus
 
 
 class FakeClient:
@@ -19,6 +20,8 @@ class FakeClient:
         self.output_dir = Path(output_dir)
         self.headless = headless
         self.calls: list[tuple[str, int | None, int | None, int]] = []
+        self.verify_calls: list[tuple[str, int | None, str, list[str] | None, bool]] = []
+        self.repair_calls: list[tuple[tuple[int, ...], int]] = []
         FakeClient.instances.append(self)
 
     async def __aenter__(self) -> FakeClient:
@@ -44,6 +47,56 @@ class FakeClient:
             total_chapters=1,
             total_images=2,
             downloaded=2,
+            skipped=0,
+            output_dir=self.output_dir,
+        )
+
+    async def verify_url(
+        self,
+        url: str,
+        *,
+        chapter_limit: int | None = None,
+        chapters_selection: str = "all",
+        chapter_filters: list[str] | None = None,
+        refresh_image_counts: bool = False,
+    ) -> VerifyReport:
+        self.verify_calls.append((url, chapter_limit, chapters_selection, chapter_filters, refresh_image_counts))
+        return VerifyReport(
+            series_title="新世紀福音戰士 完全版",
+            output_dir=self.output_dir,
+            items=(
+                VerifyItem(
+                    chapter=Chapter(
+                        manga_id=285,
+                        chapter_id=24327,
+                        title="STAGE.１ 使徒、來襲",
+                        url="https://www.bilimanga.net/read/285/24327.html",
+                    ),
+                    status=VerifyStatus.COMPLETE,
+                    local_dir=self.output_dir / "新世紀福音戰士 完全版" / "第１卷 STAGE.１ 使徒、來襲",
+                    local_image_count=2,
+                ),
+                VerifyItem(
+                    chapter=Chapter(
+                        manga_id=285,
+                        chapter_id=24334,
+                        title="STAGE.８ 真嗣不高興了",
+                        url="https://www.bilimanga.net/read/285/24334.html",
+                    ),
+                    status=VerifyStatus.MISSING,
+                    expected_image_count=18,
+                    message="chapter directory not found",
+                ),
+            ),
+        )
+
+    async def repair_report(self, report: VerifyReport, *, chapter_concurrency: int = 1) -> DownloadSummary:
+        self.repair_calls.append((tuple(chapter.chapter_id for chapter in report.repair_chapters), chapter_concurrency))
+        return DownloadSummary(
+            series_title=report.series_title,
+            total_chapters=len(report.repair_chapters),
+            total_images=18,
+            downloaded=18,
             skipped=0,
             output_dir=self.output_dir,
         )
@@ -74,6 +127,7 @@ def test_parser_supports_expected_commands_and_download_options() -> None:
             "+STAGE",
             "--chapter-concurrency",
             "3",
+            "--headed",
             "--output",
             "/tmp/out",
             "--no-optimize",
@@ -87,6 +141,7 @@ def test_parser_supports_expected_commands_and_download_options() -> None:
     assert download.format == "both"
     assert download.package == "volume"
     assert download.chapter_concurrency == 3
+    assert download.headed is True
     assert download.output == "/tmp/out"
     assert download.no_optimize is True
     assert download.quiet is True
@@ -98,6 +153,38 @@ def test_parser_supports_expected_commands_and_download_options() -> None:
     assert parser.parse_args(["history", "clear"]).action == "clear"
     assert parser.parse_args(["doctor"]).command == "doctor"
     assert parser.parse_args(["settings"]).command == "settings"
+
+
+def test_parser_supports_verify_options() -> None:
+    parser = cli.build_parser()
+
+    verify = parser.parse_args(
+        [
+            "verify",
+            "https://www.bilimanga.net/detail/285.html",
+            "--chapters",
+            "1-2",
+            "--filter",
+            "+STAGE",
+            "--deep",
+            "--repair",
+            "--chapter-concurrency",
+            "3",
+            "--output",
+            "/tmp/out",
+            "--headed",
+        ]
+    )
+
+    assert verify.command == "verify"
+    assert verify.url == "https://www.bilimanga.net/detail/285.html"
+    assert verify.chapters == "1-2"
+    assert verify.filters == ["+STAGE"]
+    assert verify.deep is True
+    assert verify.repair is True
+    assert verify.chapter_concurrency == 3
+    assert verify.output == "/tmp/out"
+    assert verify.headed is True
 
 
 def test_bare_url_is_download_shortcut(monkeypatch, tmp_path: Path) -> None:
@@ -135,6 +222,58 @@ def test_download_command_passes_legacy_limits_to_client(monkeypatch, tmp_path: 
     assert FakeClient.instances[0].headless is False
     assert FakeClient.instances[0].calls == [("https://www.bilimanga.net/read/285/24327.html", 1, 2, 4)]
     assert "新世紀福音戰士 完全版" in capsys.readouterr().out
+
+
+def test_verify_command_reports_missing_chapters(monkeypatch, tmp_path: Path, capsys) -> None:
+    FakeClient.instances = []
+    monkeypatch.setattr(cli, "BilimangaClient", FakeClient)
+
+    result = cli.main(
+        [
+            "verify",
+            "https://www.bilimanga.net/detail/285.html",
+            "--output",
+            str(tmp_path),
+            "--chapters",
+            "1-2",
+            "--filter",
+            "+STAGE",
+            "--deep",
+            "--headed",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert FakeClient.instances[0].headless is False
+    assert FakeClient.instances[0].verify_calls == [
+        ("https://www.bilimanga.net/detail/285.html", None, "1-2", ["+STAGE"], True)
+    ]
+    assert "Verified 1/2 chapter(s)" in output
+    assert "missing" in output
+    assert "STAGE.８ 真嗣不高興了" in output
+
+
+def test_verify_command_can_repair_missing_chapters(monkeypatch, tmp_path: Path, capsys) -> None:
+    FakeClient.instances = []
+    monkeypatch.setattr(cli, "BilimangaClient", FakeClient)
+
+    result = cli.main(
+        [
+            "verify",
+            "https://www.bilimanga.net/detail/285.html",
+            "--output",
+            str(tmp_path),
+            "--repair",
+            "--chapter-concurrency",
+            "4",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert FakeClient.instances[0].repair_calls == [((24334,), 4)]
+    assert "Repaired 1 chapter(s)" in output
 
 
 def test_download_command_reports_conversion_failure(monkeypatch, tmp_path: Path, capsys) -> None:

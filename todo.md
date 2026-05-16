@@ -34,6 +34,8 @@
 - [x] 失敗摘要要能區分 missing images、all failed、partial failed、conversion failed
 - [x] 補 downloader 測試覆蓋 complete/skip/partial/retry/corrupt-file/path-escape
 - [x] 支援章節級併發，避免 detail/volume 批量下載只串行處理章節
+- [x] 下載完成後寫入 `chapter.meta.json`，供後續本地驗證使用 chapter id、title、expected image count 做穩定匹配
+- [x] 支援本地驗證與修復：對照遠端 chapter list，回報 missing/incomplete/image mismatch，並可只重抓異常章節
 
 ## 3. 瀏覽器與 HTTP runtime
 
@@ -52,6 +54,7 @@
 - [x] 支援章節 filter：`+keyword`、`-keyword`、undo、reset
 - [x] 支援 `--format pdf|cbz|both`、`--output`、`--no-optimize`、`--quiet`、`--debug`
 - [x] 支援 `--chapter-concurrency`，可按站點穩定性調整章節並行數
+- [x] 支援 `verify` 命令，快速掃描本地缺章；`--deep` 載入 reader 頁比對圖片數；`--repair` 只重抓異常章節
 - [x] 用 Rich table/panel 顯示 series metadata、chapter list、download progress、summary
 - [x] `doctor` 檢查 Python、依賴、Chrome/Playwright、output dir、bilimanga URL probe
 - [x] 補 CLI flow tests，避免互動流程和 non-interactive 流程分叉

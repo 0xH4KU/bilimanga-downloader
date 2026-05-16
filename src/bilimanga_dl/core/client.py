@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Self
 
+from bilimanga_dl.core.converters import collect_images
 from bilimanga_dl.core.downloader import DownloadResult, ImageDownloader
 from bilimanga_dl.core.errors import BrowserTimeoutError, HttpStatusError
+from bilimanga_dl.core.fileio import atomic_write_text
 from bilimanga_dl.core.http import BilimangaHttpClient
 from bilimanga_dl.core.models import Chapter, Series, Volume
 from bilimanga_dl.core.reader import PlaywrightBrowser
 from bilimanga_dl.core.reporting import DownloadIssue
 from bilimanga_dl.core.selection import apply_chapter_filters, parse_chapter_selection
+from bilimanga_dl.core.verify import ExpectedChapter, VerifyReport, VerifyStatus, build_verify_report
 from bilimanga_dl.sites.bilimanga import BilimangaParser
 
 if TYPE_CHECKING:
@@ -207,31 +212,31 @@ class BilimangaClient:
         chapter_concurrency: int = 1,
     ) -> DownloadSummary:
         """Download a series, volume, or chapter URL."""
-        parsed = self._parser.parse_url(url)
-        if parsed.kind == "series":
-            series_title, chapters = await self._chapters_from_series(url)
-        elif parsed.kind == "volume":
-            volume = await self.load_volume(url)
-            series_title = volume.title
-            chapters = list(volume.chapters)
-        elif parsed.kind == "chapter":
-            series_title, chapters = "", [Chapter(parsed.manga_id or 0, parsed.chapter_id or 0, "", url)]
-        else:
-            raise ValueError(f"Unsupported bilimanga URL: {url}")
+        series_title, chapters = await self._resolve_chapters(
+            url,
+            chapter_limit=chapter_limit,
+            chapters_selection=chapters_selection,
+            chapter_filters=chapter_filters,
+        )
+        return await self._download_chapters(
+            series_title,
+            chapters,
+            image_limit=image_limit,
+            chapter_concurrency=chapter_concurrency,
+        )
 
-        if chapter_limit is not None:
-            chapters = chapters[:chapter_limit]
-        if chapter_filters:
-            chapters = apply_chapter_filters(chapters, chapter_filters)
-        chapters = parse_chapter_selection(chapters_selection, chapters)
-
-        resolved_series_title = series_title
-        if not resolved_series_title:
-            for chapter_stub in chapters:
-                if chapter_stub.series_title:
-                    resolved_series_title = chapter_stub.series_title
-                    break
-
+    async def _download_chapters(
+        self,
+        series_title: str,
+        chapters: list[Chapter],
+        *,
+        image_limit: int | None,
+        chapter_concurrency: int,
+    ) -> DownloadSummary:
+        resolved_series_title = series_title or next(
+            (chapter_stub.series_title for chapter_stub in chapters if chapter_stub.series_title),
+            "",
+        )
         semaphore = asyncio.Semaphore(max(1, chapter_concurrency))
 
         async def download_one(chapter_stub: Chapter) -> _ChapterOutcome:
@@ -271,6 +276,63 @@ class BilimangaClient:
             chapters=tuple(downloaded_chapters),
         )
 
+    async def verify_url(
+        self,
+        url: str,
+        *,
+        chapter_limit: int | None = None,
+        chapters_selection: str = "all",
+        chapter_filters: list[str] | None = None,
+        refresh_image_counts: bool = False,
+    ) -> VerifyReport:
+        """Compare local downloads with the remote chapter list."""
+        series_title, chapters = await self._resolve_chapters(
+            url,
+            chapter_limit=chapter_limit,
+            chapters_selection=chapters_selection,
+            chapter_filters=chapter_filters,
+        )
+        expected: list[ExpectedChapter] = []
+        resolved_series_title = series_title
+        for chapter_stub in chapters:
+            resolved_chapter = chapter_stub
+            image_count: int | None = None
+            if refresh_image_counts or not chapter_stub.title or not resolved_series_title:
+                resolved_chapter = await self.load_chapter(chapter_stub.url)
+                if not resolved_series_title:
+                    resolved_series_title = (
+                        resolved_chapter.series_title
+                        or chapter_stub.series_title
+                        or self._infer_series_title(resolved_chapter)
+                    )
+                if refresh_image_counts:
+                    image_count = len(resolved_chapter.image_urls)
+            expected.append(ExpectedChapter(chapter=resolved_chapter, expected_image_count=image_count))
+        return build_verify_report(resolved_series_title, expected, self.output_dir)
+
+    async def repair_report(
+        self,
+        report: VerifyReport,
+        *,
+        chapter_concurrency: int = 1,
+    ) -> DownloadSummary:
+        """Redownload chapters that failed verification."""
+        for item in report.items:
+            if item.status == VerifyStatus.COMPLETE or item.local_dir is None:
+                continue
+            with contextlib.suppress(OSError):
+                (item.local_dir / ".complete").unlink()
+            if item.status == VerifyStatus.IMAGE_MISMATCH:
+                for image_path in collect_images(item.local_dir):
+                    with contextlib.suppress(OSError):
+                        image_path.unlink()
+        return await self._download_chapters(
+            report.series_title,
+            list(report.repair_chapters),
+            image_limit=None,
+            chapter_concurrency=chapter_concurrency,
+        )
+
     async def _download_chapter_stub(
         self,
         chapter_stub: Chapter,
@@ -304,6 +366,13 @@ class BilimangaClient:
                 or _volume_title_from_chapter(chapter.title),
                 chapter_dir=result.chapter_dir,
             )
+            _write_chapter_metadata(
+                result.chapter_dir,
+                series_title=resolved_series_title,
+                volume_title=downloaded_chapter.volume_title,
+                chapter=chapter,
+                expected_image_count=len(image_urls),
+            )
             return _ChapterOutcome(
                 result=result,
                 downloaded_chapter=downloaded_chapter,
@@ -317,6 +386,33 @@ class BilimangaClient:
                     message=str(exc) or exc.__class__.__name__,
                 ),
             )
+
+    async def _resolve_chapters(
+        self,
+        url: str,
+        *,
+        chapter_limit: int | None = None,
+        chapters_selection: str = "all",
+        chapter_filters: list[str] | None = None,
+    ) -> tuple[str, list[Chapter]]:
+        parsed = self._parser.parse_url(url)
+        if parsed.kind == "series":
+            series_title, chapters = await self._chapters_from_series(url)
+        elif parsed.kind == "volume":
+            volume = await self.load_volume(url)
+            series_title = volume.title
+            chapters = list(volume.chapters)
+        elif parsed.kind == "chapter":
+            series_title, chapters = "", [Chapter(parsed.manga_id or 0, parsed.chapter_id or 0, "", url)]
+        else:
+            raise ValueError(f"Unsupported bilimanga URL: {url}")
+
+        if chapter_limit is not None:
+            chapters = chapters[:chapter_limit]
+        if chapter_filters:
+            chapters = apply_chapter_filters(chapters, chapter_filters)
+        chapters = parse_chapter_selection(chapters_selection, chapters)
+        return series_title, chapters
 
     async def _chapters_from_series(self, url: str) -> tuple[str, list[Chapter]]:
         series = await self.load_series(url)
@@ -350,6 +446,27 @@ def _volume_title_from_chapter(chapter_title: str) -> str:
     if " " in chapter_title:
         return chapter_title.split(" ", 1)[0]
     return "Volume"
+
+
+def _write_chapter_metadata(
+    chapter_dir: Path,
+    *,
+    series_title: str,
+    volume_title: str,
+    chapter: Chapter,
+    expected_image_count: int,
+) -> None:
+    payload = {
+        "series_title": series_title,
+        "volume_title": volume_title,
+        "title": chapter.title,
+        "manga_id": chapter.manga_id,
+        "chapter_id": chapter.chapter_id,
+        "url": chapter.url,
+        "expected_image_count": expected_image_count,
+        "image_urls": chapter.image_urls,
+    }
+    atomic_write_text(chapter_dir / "chapter.meta.json", json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def _issues_from_results(results: list[DownloadResult]) -> tuple[DownloadIssue, ...]:
